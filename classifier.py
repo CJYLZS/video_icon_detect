@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 
 from icon_roi import TEMPLATE_DIR, crop_detect_roi
+from media_io import parse_frame_index_from_path
 
 CLASSIFIER_PATH = TEMPLATE_DIR / "icon_classifier.pt"
 CLASSIFIER_INPUT = 64
@@ -48,8 +49,9 @@ def build_classifier_model():
 
 def train_classifier(
     image_dir: Path,
-    positive_from: int,
     *,
+    positive_frames: set[int] | None = None,
+    positive_from: int | None = None,
     epochs: int = 40,
     batch_size: int = 8,
     lr: float = 1e-3,
@@ -58,18 +60,25 @@ def train_classifier(
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
 
+    if positive_frames is None and positive_from is None:
+        raise ValueError("请指定 positive_frames 或 positive_from")
+
     paths = sorted(image_dir.glob("frame_*.jpg"))
     xs, ys = [], []
     for p in paths:
-        if not p.stem.startswith("frame_") or not p.stem[6:].isdigit():
+        idx = parse_frame_index_from_path(p)
+        if idx is None:
             continue
-        idx = int(p.stem[6:])
         frame = cv2.imread(str(p))
         if frame is None:
             continue
+        if positive_frames is not None:
+            label = 1 if idx in positive_frames else 0
+        else:
+            label = 1 if idx >= positive_from else 0
         roi, _ = crop_detect_roi(frame)
         xs.append(_prepare_cls_tensor(roi))
-        ys.append(1 if idx >= positive_from else 0)
+        ys.append(label)
 
     if len(xs) < 4:
         raise RuntimeError("分类训练样本过少")

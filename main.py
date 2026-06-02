@@ -46,7 +46,7 @@ def cmd_extract(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"视频不存在: {args.video}")
 
     _, total, video_fps = open_video(args.video)
-    indices = collect_extract_indices(args, total, video_fps)
+    indices = collect_extract_indices(args, args.video, total, video_fps)
     if not indices:
         raise SystemExit("没有可提取的帧")
 
@@ -80,7 +80,16 @@ def cmd_train(args: argparse.Namespace) -> None:
         raise SystemExit("--image-dir 必须是包含 frame_XXXXX.jpg 的目录")
     if not DEFAULT_TEMPLATE_BIN.is_file() or not DEFAULT_TEMPLATE_META.is_file():
         raise SystemExit("请先运行: python main.py template --image <参考图>")
-    train_classifier(args.image_dir, args.positive_from, epochs=args.epochs)
+
+    positive_frames = set(args.positive) if args.positive else None
+    train_classifier(
+        args.image_dir,
+        positive_frames=positive_frames,
+        positive_from=args.positive_from,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+    )
 
 
 def cmd_infer(args: argparse.Namespace) -> None:
@@ -135,12 +144,14 @@ def cmd_infer(args: argparse.Namespace) -> None:
 
     hits = 0
     hit_frames: list[int] = []
+    skipped = 0
     verbose = len(indices) <= 35
     cls_model, cls_device = cls_bundle if cls_bundle else (None, None)
 
     for idx in indices:
         frame = load_frame(det_video, det_image_dir, idx)
         if frame is None:
+            skipped += 1
             continue
         roi, _ = crop_detect_roi(frame)
         cls_p = classifier_prob(roi, cls_model, cls_device) if cls_model is not None else None
@@ -173,6 +184,8 @@ def cmd_infer(args: argparse.Namespace) -> None:
         if args.save_images:
             cv2.imwrite(str(args.output_dir / f"frame_{idx:05d}_icon.jpg"), draw_detection(frame, det))
 
+    if skipped:
+        print(f"警告: {skipped}/{len(indices)} 帧无法读取（请检查 frames 文件名是否与帧号一致）")
     print(f"\n完成: {hits}/{len(indices)} 帧命中")
     if hit_frames:
         print(f"命中帧: {hit_frames}")
@@ -183,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="和平精英击倒图标检测（固定 ROI + 二值 template）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""示例:
-  python main.py extract --video test.mp4 --output-dir frames --start-frame 140 --end-frame 160
+  python main.py extract --video test.mp4 --output-dir frames --start-sec 38 --end-sec 45 --fps 5
   python main.py template --image frames/frame_00153.jpg
   python main.py train --image-dir frames --positive-from 153
   python main.py infer --image-dir frames --output-dir output/icon_detect
@@ -198,8 +211,6 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--frame", type=int, action="append")
     g.add_argument("--seconds", type=float, action="append")
     r = ex.add_argument_group("范围")
-    r.add_argument("--start-frame", type=int)
-    r.add_argument("--end-frame", type=int)
     r.add_argument("--start-sec", type=float)
     r.add_argument("--end-sec", type=float)
     r.add_argument("--step", type=int, default=1, help="每隔多少帧取 1 张（与 --fps 二选一，--fps 优先）")
@@ -221,8 +232,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     tr = sub.add_parser("train", help="训练可选 ROI 分类器")
     tr.add_argument("--image-dir", type=Path, required=True)
-    tr.add_argument("--positive-from", type=int, default=153, help=">= 该帧号为正样本")
+    label = tr.add_mutually_exclusive_group(required=True)
+    label.add_argument(
+        "--positive",
+        type=int,
+        nargs="+",
+        metavar="FRAME",
+        help="正样本帧号列表，其余为负样本",
+    )
+    label.add_argument(
+        "--positive-from",
+        type=int,
+        metavar="N",
+        help=">= N 的帧为正样本（其余为负样本）",
+    )
     tr.add_argument("--epochs", type=int, default=40)
+    tr.add_argument("--batch-size", type=int, default=8)
+    tr.add_argument("--lr", type=float, default=1e-3)
     tr.set_defaults(func=cmd_train)
 
     inf = sub.add_parser("infer", help="对视频或帧目录推理")

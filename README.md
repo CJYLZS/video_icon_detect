@@ -23,13 +23,15 @@ python -m venv .venv
 ### 1. 抽帧
 
 ```powershell
-.\.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames_140_160 --start-frame 140 --end-frame 160
+.\.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames_38_45 --start-sec 38 --end-sec 45
 
 # 按频率抽帧：每秒 1 张（30fps 视频约每隔 30 帧取 1 张）
 .\.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames --fps 1
 
 # 指定时间段 + 抽帧频率
 .\.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames --start-sec 10 --end-sec 60 --fps 2
+
+> `extract` 在时间过滤上使用真实帧时间戳（PTS），可正确处理可变帧率（VFR）视频。
 ```
 
 ### 2. 构造模板（指定一张含图标的截图）
@@ -43,6 +45,10 @@ python -m venv .venv
 ### 3. 训练分类器（可选）
 
 ```powershell
+# 显式指定正样本帧号（推荐）
+.\.venv\Scripts\python.exe main.py train --image-dir frames --positive 2725 2713 2701 2677 2665
+
+# 或按阈值：>= 153 为正样本
 .\.venv\Scripts\python.exe main.py train --image-dir frames_140_160 --positive-from 153
 ```
 

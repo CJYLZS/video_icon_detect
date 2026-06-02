@@ -44,6 +44,22 @@ def _get_capture_orientation(cap: cv2.VideoCapture) -> float:
     return float(cap.get(prop))
 
 
+def _resolve_orientation_for_manual_apply(cap: cv2.VideoCapture) -> float:
+    """决定是否需要手动旋转，避免与 OpenCV 自动旋转重复。"""
+    orientation_deg = _get_capture_orientation(cap)
+    auto_prop = getattr(cv2, "CAP_PROP_ORIENTATION_AUTO", None)
+    if auto_prop is None:
+        return orientation_deg
+
+    # 优先关闭 OpenCV 自动旋转，统一走手动旋转。
+    cap.set(auto_prop, 0)
+    auto_now = cap.get(auto_prop)
+    if auto_now >= 0.5:
+        # 后端仍强制自动旋转，避免二次旋转。
+        return 0.0
+    return orientation_deg
+
+
 def load_bgr(path: Path) -> np.ndarray:
     frame = cv2.imread(str(path))
     if frame is None:
@@ -71,38 +87,163 @@ def sample_step(video_fps: float, extract_fps: float) -> int:
     return max(1, int(round(video_fps / extract_fps)))
 
 
-def collect_extract_indices(args: argparse.Namespace, total: int, video_fps: float) -> list[int]:
+def _frame_time_at(
+    cap: cv2.VideoCapture,
+    idx: int,
+    total: int,
+    cache: dict[int, float],
+) -> float:
+    if idx in cache:
+        return cache[idx]
+    if idx < 0 or idx >= total:
+        return float("inf")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    ok, _frame = cap.read()
+    if not ok:
+        return float("inf")
+    t_sec = (cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
+    cache[idx] = t_sec
+    return t_sec
+
+
+def _locate_first_frame_at_or_after(
+    cap: cv2.VideoCapture,
+    target_sec: float,
+    total: int,
+    cache: dict[int, float],
+) -> int:
+    lo, hi = 0, total - 1
+    ans = total
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        t_mid = _frame_time_at(cap, mid, total, cache)
+        if t_mid >= target_sec:
+            ans = mid
+            hi = mid - 1
+        else:
+            lo = mid + 1
+    return ans
+
+
+def _locate_last_frame_at_or_before(
+    cap: cv2.VideoCapture,
+    target_sec: float,
+    total: int,
+    cache: dict[int, float],
+) -> int:
+    lo, hi = 0, total - 1
+    ans = -1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        t_mid = _frame_time_at(cap, mid, total, cache)
+        if t_mid <= target_sec:
+            ans = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return ans
+
+
+def _collect_indices_for_seconds(
+    cap: cv2.VideoCapture,
+    points: list[float],
+    total: int,
+    cache: dict[int, float],
+) -> list[int]:
+    out: set[int] = set()
+    for sec in points:
+        idx = _locate_first_frame_at_or_after(cap, max(0.0, sec), total, cache)
+        if 0 <= idx < total:
+            out.add(idx)
+    return sorted(out)
+
+
+def _collect_indices_for_range(
+    cap: cv2.VideoCapture,
+    *,
+    start_sec: float,
+    end_sec: float,
+    total: int,
+    step: int,
+    extract_fps: float | None,
+    cache: dict[int, float],
+) -> list[int]:
+    lo = _locate_first_frame_at_or_after(cap, start_sec, total, cache)
+    hi = _locate_last_frame_at_or_before(cap, end_sec, total, cache)
+    if lo > hi or lo >= total or hi < 0:
+        return []
+    if extract_fps is None:
+        return list(range(lo, hi + 1, max(1, step)))
+
+    # 按真实时间等间隔采样，避免 VFR 下 frame/fps 误差。
+    interval = 1.0 / extract_fps
+    t = start_sec
+    out: set[int] = set()
+    while t <= end_sec + 1e-9:
+        idx = _locate_first_frame_at_or_after(cap, t, total, cache)
+        if idx > hi:
+            break
+        out.add(idx)
+        t += interval
+    return sorted(out)
+
+
+def _last_valid_timestamp(cap: cv2.VideoCapture, total: int, cache: dict[int, float]) -> float:
+    # 某些容器最后几帧可能 seek/read 失败，向前回退查找可读时间戳。
+    for idx in range(total - 1, max(-1, total - 12), -1):
+        t = _frame_time_at(cap, idx, total, cache)
+        if t != float("inf"):
+            return t
+    return float("inf")
+
+
+def collect_extract_indices(
+    args: argparse.Namespace,
+    video_path: Path,
+    total: int,
+    video_fps: float,
+) -> list[int]:
     if args.frame:
         return sorted({i for i in args.frame if 0 <= i < total})
-    if args.seconds:
-        return sorted({sec_to_frame(s, video_fps, total) for s in args.seconds})
 
     extract_fps = getattr(args, "fps", None)
-    if args.start_frame is not None or args.end_frame is not None:
-        start = args.start_frame if args.start_frame is not None else 0
-        end = args.end_frame if args.end_frame is not None else total - 1
-    elif args.start_sec is not None or args.end_sec is not None:
-        start = sec_to_frame(args.start_sec or 0.0, video_fps, total)
-        end = sec_to_frame(
-            args.end_sec if args.end_sec is not None else (total - 1) / video_fps,
-            video_fps,
-            total,
-        )
-    elif extract_fps is not None:
-        start, end = 0, total - 1
-    else:
-        raise SystemExit("请指定 --frame、--seconds、--fps，或范围参数（--start-frame 等）")
+    has_time_args = (
+        bool(args.seconds)
+        or args.start_sec is not None
+        or args.end_sec is not None
+        or extract_fps is not None
+    )
+    if not has_time_args:
+        raise SystemExit("请指定 --frame、--seconds、--fps，或时间范围参数（--start-sec/--end-sec）")
 
-    start = max(0, min(start, total - 1))
-    end = max(0, min(end, total - 1))
-    if start > end:
-        start, end = end, start
+    cap, actual_total, _ = open_video(video_path)
+    total = min(total, actual_total)
+    cache: dict[int, float] = {}
+    try:
+        if args.seconds:
+            return _collect_indices_for_seconds(cap, args.seconds, total, cache)
 
-    if extract_fps is not None:
-        step = sample_step(video_fps, extract_fps)
-    else:
+        max_sec = _last_valid_timestamp(cap, total, cache)
+        if max_sec == float("inf"):
+            return []
+        start_sec = max(0.0, args.start_sec or 0.0)
+        end_sec = args.end_sec if args.end_sec is not None else max_sec
+        if start_sec > end_sec:
+            start_sec, end_sec = end_sec, start_sec
+        end_sec = min(end_sec, max_sec)
+
         step = max(1, args.step)
-    return list(range(start, end + 1, step))
+        return _collect_indices_for_range(
+            cap,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            total=total,
+            step=step,
+            extract_fps=extract_fps,
+            cache=cache,
+        )
+    finally:
+        cap.release()
 
 
 def extract_frames(
@@ -114,7 +255,7 @@ def extract_frames(
     ext: str = "jpg",
 ) -> int:
     cap, total, fps = open_video(video_path)
-    orientation_deg = _get_capture_orientation(cap)
+    orientation_deg = _resolve_orientation_for_manual_apply(cap)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     saved = 0
@@ -128,9 +269,11 @@ def extract_frames(
             print(f"读取帧 {idx} 失败")
             continue
         frame = _apply_orientation(frame, orientation_deg)
-        out_path = output_dir / f"{prefix}_{idx:05d}.{ext}"
+        t_sec = (cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
+        t_ms = int(round(t_sec * 1000.0))
+        out_path = output_dir / f"{prefix}_{idx:05d}_t{t_ms:08d}ms.{ext}"
         cv2.imwrite(str(out_path), frame)
-        print(f"帧 {idx} ({idx / fps:.2f}s) -> {out_path.name}")
+        print(f"帧 {idx} ({t_sec:.3f}s) -> {out_path.name}")
         saved += 1
 
     cap.release()
@@ -138,12 +281,36 @@ def extract_frames(
     return saved
 
 
+def find_frame_image_path(image_dir: Path, idx: int) -> Path | None:
+    """按帧号查找图片，兼容 frame_00123.jpg 与 frame_00123_t00012345ms.jpg。"""
+    for ext in (".jpg", ".png"):
+        plain = image_dir / f"frame_{idx:05d}{ext}"
+        if plain.is_file():
+            return plain
+    for ext in (".jpg", ".png"):
+        tagged = sorted(image_dir.glob(f"frame_{idx:05d}_*{ext}"))
+        if tagged:
+            return tagged[0]
+    return None
+
+
+def parse_frame_index_from_path(path: Path) -> int | None:
+    """从 frame_00123.jpg / frame_00123_t00012345ms.jpg 解析帧号。"""
+    stem = path.stem
+    if not stem.startswith("frame_"):
+        return None
+    frame_str = stem[6:].split("_", 1)[0]
+    if frame_str.isdigit():
+        return int(frame_str)
+    return None
+
+
 def list_image_dir_frames(image_dir: Path) -> list[int]:
     indices: list[int] = []
     for p in sorted(image_dir.glob("frame_*.jpg")):
-        stem = p.stem
-        if stem.startswith("frame_") and stem[6:].isdigit():
-            indices.append(int(stem[6:]))
+        idx = parse_frame_index_from_path(p)
+        if idx is not None:
+            indices.append(idx)
     return sorted(set(indices))
 
 
@@ -191,15 +358,14 @@ def resolve_media_source(video: Path, image_dir: Path | None) -> tuple[Path | No
 
 def load_frame(video_path: Path | None, image_dir: Path | None, idx: int) -> np.ndarray | None:
     if image_dir:
-        for ext in (".jpg", ".png"):
-            path = image_dir / f"frame_{idx:05d}{ext}"
-            if path.is_file():
-                return cv2.imread(str(path))
-        return None
+        path = find_frame_image_path(image_dir, idx)
+        if path is None:
+            return None
+        return cv2.imread(str(path))
     if video_path is None:
         return None
     cap = cv2.VideoCapture(str(video_path))
-    orientation_deg = _get_capture_orientation(cap)
+    orientation_deg = _resolve_orientation_for_manual_apply(cap)
     cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
     ok, frame = cap.read()
     cap.release()

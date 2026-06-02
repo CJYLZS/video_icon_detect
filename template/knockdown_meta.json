@@ -1,19 +1,19 @@
 {
   "frame_index": null,
-  "source": "D:\\code\\video_edit\\frames_140_160\\frame_00153.jpg",
+  "source": "D:\\code\\video_icon_detect\\frames\\frame_02725_t00045615ms.jpg",
   "roi_offset": [
-    498,
-    389
+    1133,
+    886
   ],
   "roi_size": [
-    41,
-    21
+    94,
+    49
   ],
   "ref_box_roi": {
-    "x1": 10.0,
-    "y1": 4.0,
-    "x2": 31.0,
-    "y2": 18.0
+    "x1": 21.0,
+    "y1": 7.0,
+    "x2": 73.0,
+    "y2": 43.0
   },
   "detect_roi": {
     "cx": 0.5,
