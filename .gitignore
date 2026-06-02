@@ -1,0 +1,46 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# 环境变量
+.env
+.env.*
+
+# IDE / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 项目产物（README：output 为检测结果）
+output/
+frames/
+frames_*/
+runs/
+datasets/
+
+# 本地测试视频（体积大，勿入库）
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv
+*.flv
+*.webm
+
+# 模型权重（train 产出；含 template/icon_classifier.pt）
+*.pt
+*.pth
+*.onnx
+*.weights

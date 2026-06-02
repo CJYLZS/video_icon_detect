@@ -1,0 +1,24 @@
+{
+  "frame_index": null,
+  "source": "D:\\code\\video_edit\\frames_140_160\\frame_00153.jpg",
+  "roi_offset": [
+    498,
+    389
+  ],
+  "roi_size": [
+    41,
+    21
+  ],
+  "ref_box_roi": {
+    "x1": 10.0,
+    "y1": 4.0,
+    "x2": 31.0,
+    "y2": 18.0
+  },
+  "detect_roi": {
+    "cx": 0.5,
+    "cy": 0.555,
+    "w": 0.04,
+    "h": 0.03
+  }
+}
