@@ -14,6 +14,36 @@ OUTPUT_DIR = ROOT / "output"
 ROI_CHECK_DIR = OUTPUT_DIR / "roi_check"
 
 
+def _normalize_orientation_deg(value: float) -> int:
+    """将 OpenCV 返回的方向角规整到 0/90/180/270。"""
+    deg = int(round(value)) % 360
+    # 某些容器会写入接近整角的浮点值，统一吸附到最近整角。
+    candidates = (0, 90, 180, 270)
+    nearest = min(candidates, key=lambda x: abs(x - deg))
+    if abs(nearest - deg) <= 2:
+        return nearest
+    return 0
+
+
+def _apply_orientation(frame: np.ndarray, orientation_deg: float) -> np.ndarray:
+    """按视频旋转元数据纠正画面方向。"""
+    deg = _normalize_orientation_deg(orientation_deg)
+    if deg == 90:
+        return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    if deg == 180:
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    if deg == 270:
+        return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return frame
+
+
+def _get_capture_orientation(cap: cv2.VideoCapture) -> float:
+    prop = getattr(cv2, "CAP_PROP_ORIENTATION_META", None)
+    if prop is None:
+        return 0.0
+    return float(cap.get(prop))
+
+
 def load_bgr(path: Path) -> np.ndarray:
     frame = cv2.imread(str(path))
     if frame is None:
@@ -84,6 +114,7 @@ def extract_frames(
     ext: str = "jpg",
 ) -> int:
     cap, total, fps = open_video(video_path)
+    orientation_deg = _get_capture_orientation(cap)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     saved = 0
@@ -96,6 +127,7 @@ def extract_frames(
         if not ok:
             print(f"读取帧 {idx} 失败")
             continue
+        frame = _apply_orientation(frame, orientation_deg)
         out_path = output_dir / f"{prefix}_{idx:05d}.{ext}"
         cv2.imwrite(str(out_path), frame)
         print(f"帧 {idx} ({idx / fps:.2f}s) -> {out_path.name}")
@@ -167,7 +199,10 @@ def load_frame(video_path: Path | None, image_dir: Path | None, idx: int) -> np.
     if video_path is None:
         return None
     cap = cv2.VideoCapture(str(video_path))
+    orientation_deg = _get_capture_orientation(cap)
     cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
     ok, frame = cap.read()
     cap.release()
-    return frame if ok else None
+    if not ok:
+        return None
+    return _apply_orientation(frame, orientation_deg)
