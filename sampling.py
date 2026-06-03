@@ -15,6 +15,20 @@ def sample_step(video_fps: float, extract_fps: float) -> int:
     return max(1, int(round(video_fps / extract_fps)))
 
 
+def resolve_time_window(
+    args: argparse.Namespace,
+    video_path: Path,
+) -> tuple[float, float]:
+    """解析剪辑/检测时间窗；未指定 end 时为视频结束，未指定 start 时为 0。"""
+    index = load_or_build_index(video_path)
+    start_sec = max(0.0, args.start_sec if args.start_sec is not None else 0.0)
+    end_sec = args.end_sec if args.end_sec is not None else index.max_sec
+    if start_sec > end_sec:
+        start_sec, end_sec = end_sec, start_sec
+    end_sec = min(end_sec, index.max_sec)
+    return start_sec, end_sec
+
+
 def resolve_frame_indices(
     args: argparse.Namespace,
     video_path: Path,

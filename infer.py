@@ -11,7 +11,15 @@ import numpy as np
 
 from classifier import classifier_prob, load_classifier
 from frame_source import FrameSource, resolve_media_source
-from icon_roi import DEFAULT_MATCH_THRESH, crop_detect_roi, detect_frame, draw_detection, load_template
+from progress import print_progress
+from icon_roi import (
+    DEFAULT_MATCH_THRESH,
+    crop_detect_roi,
+    detect_frame,
+    draw_detection,
+    load_template,
+    load_template_meta,
+)
 
 
 @dataclass
@@ -22,6 +30,7 @@ class InferConfig:
     image_dir: Path | None = None
     match_thresh: float = DEFAULT_MATCH_THRESH
     use_classifier: bool = False
+    cls_only: bool = False
     cls_thresh: float = 0.5
 
 
@@ -40,8 +49,8 @@ class InferResult:
     skipped: int
 
 
-def _load_classifier_bundle(use_classifier: bool):
-    if not use_classifier:
+def _load_classifier_bundle(use_classifier: bool, *, cls_only: bool = False):
+    if not use_classifier and not cls_only:
         return None, None
     bundle = load_classifier()
     if not bundle:
@@ -53,8 +62,14 @@ def _iter_with_source(
     config: InferConfig,
     src: FrameSource,
 ) -> Iterator[FrameDetection | None]:
-    tpl_bin, tpl_gray, tpl_mask, meta = load_template()
-    cls_model, cls_device = _load_classifier_bundle(config.use_classifier)
+    if config.cls_only:
+        tpl_bin = tpl_gray = tpl_mask = None
+        meta = load_template_meta()
+    else:
+        tpl_bin, tpl_gray, tpl_mask, meta = load_template()
+    cls_model, cls_device = _load_classifier_bundle(
+        config.use_classifier, cls_only=config.cls_only
+    )
 
     for idx in config.indices:
         frame = src.load(idx)
@@ -76,7 +91,8 @@ def _iter_with_source(
             match_thresh=config.match_thresh,
             cls_prob=cls_p,
             cls_thresh=config.cls_thresh,
-            require_classifier=config.use_classifier,
+            require_classifier=config.use_classifier and not config.cls_only,
+            cls_only=config.cls_only,
         )
         t_sec = idx / config.fps if config.fps else 0.0
         yield FrameDetection(
@@ -111,6 +127,22 @@ def run_infer(config: InferConfig) -> InferResult:
         elif item.detection["present"]:
             hits.append(item)
     return InferResult(detections=hits, skipped=skipped)
+
+
+def collect_hit_frame_indices(
+    config: InferConfig,
+    *,
+    show_progress: bool = False,
+) -> list[int]:
+    """检测命中帧号（升序），不保留图像。"""
+    total = len(config.indices)
+    hits: list[int] = []
+    for n, item in enumerate(iter_detections(config), start=1):
+        if item is not None and item.detection["present"]:
+            hits.append(item.frame_index)
+        if show_progress:
+            print_progress(n, total, label="检测", detail=f"命中 {len(hits)}")
+    return hits
 
 
 def save_detection_image(output_dir: Path, item: FrameDetection) -> None:

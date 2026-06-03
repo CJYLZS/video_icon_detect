@@ -8,13 +8,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
-TEMPLATE_DIR = ROOT / "template"
+from paths import TEMPLATE_DIR
+
 DEFAULT_TEMPLATE_BIN = TEMPLATE_DIR / "knockdown_bin.png"
 DEFAULT_TEMPLATE_GRAY = TEMPLATE_DIR / "knockdown_gray.png"
 DEFAULT_TEMPLATE_COLOR = TEMPLATE_DIR / "knockdown_color.jpg"
 DEFAULT_TEMPLATE_META = TEMPLATE_DIR / "knockdown_meta.json"
-DEFAULT_TEMPLATE_FRAME = 153
 
 DETECT_ROI_CX = 0.50
 DETECT_ROI_CY = 0.555
@@ -115,7 +114,7 @@ def load_template() -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
     tpl_bin = cv2.imread(str(DEFAULT_TEMPLATE_BIN), cv2.IMREAD_GRAYSCALE)
     tpl_gray = cv2.imread(str(DEFAULT_TEMPLATE_GRAY), cv2.IMREAD_GRAYSCALE)
     if tpl_bin is None or tpl_gray is None:
-        raise FileNotFoundError("模板不存在，请先 --build-template")
+        raise FileNotFoundError("模板不存在，请先: python main.py template --image <参考图>")
     _, mask = cv2.threshold(tpl_bin, 128, 255, cv2.THRESH_BINARY)
     meta = load_template_meta()
     return tpl_bin, tpl_gray, mask, meta
@@ -178,10 +177,27 @@ def detect_frame(
     cls_prob: float | None = None,
     cls_thresh: float = 0.5,
     require_classifier: bool = False,
+    cls_only: bool = False,
 ) -> dict:
     roi, offset = crop_detect_roi(frame)
     if roi.size == 0:
         return {"present": False, "score": 0.0, "method": "none", "box": None}
+
+    if cls_only:
+        score = float(cls_prob) if cls_prob is not None else 0.0
+        present = cls_prob is not None and cls_prob >= cls_thresh
+        box = ref_box_to_full(meta, offset) if present else None
+        if box is not None:
+            box["score"] = score
+        return {
+            "present": present,
+            "score": score,
+            "bin_score": None,
+            "zncc_score": None,
+            "cls_prob": cls_prob,
+            "method": "cls" if present else "none",
+            "box": box,
+        }
 
     s = score_roi(roi, tpl_bin, tpl_gray, tpl_mask, match_thresh=0.0)
     final = s["score"]

@@ -9,9 +9,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-FFPROBE = ROOT / "tools" / "ffmpeg-8.1.1-essentials_build" / "bin" / "ffprobe.exe"
-INDEX_DIR = ROOT / "output" / "video_index"
+from paths import FFPROBE, VIDEO_INDEX_DIR
+
 INDEX_VERSION = 1
 
 
@@ -39,6 +38,17 @@ class VideoPtsIndex:
     def max_sec(self) -> float:
         return self.pts_sec[-1] if self.pts_sec else 0.0
 
+    def pts_for_frame(self, frame_idx: int) -> float:
+        """返回指定帧号对应的呈现时间（秒）。"""
+        if not self.pts_sec:
+            return 0.0
+        i = bisect.bisect_left(self.frame_indices, frame_idx)
+        if i < len(self.frame_indices) and self.frame_indices[i] == frame_idx:
+            return self.pts_sec[i]
+        if i > 0:
+            return self.pts_sec[i - 1]
+        return self.pts_sec[0]
+
 
 def _video_cache_key(video_path: Path) -> str:
     resolved = str(video_path.resolve())
@@ -48,7 +58,7 @@ def _video_cache_key(video_path: Path) -> str:
 
 
 def index_cache_path(video_path: Path) -> Path:
-    return INDEX_DIR / f"{video_path.stem}_{_video_cache_key(video_path)}.json"
+    return VIDEO_INDEX_DIR / f"{video_path.stem}_{_video_cache_key(video_path)}.json"
 
 
 def _parse_pts_lines(text: str) -> list[float]:

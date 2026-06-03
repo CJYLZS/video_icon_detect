@@ -69,7 +69,11 @@ def find_frame_image_path(image_dir: Path, idx: int) -> Path | None:
         if plain.is_file():
             return plain
     for ext in (".jpg", ".png"):
-        tagged = sorted(image_dir.glob(f"frame_{idx:05d}_*{ext}"))
+        tagged = sorted(
+            p
+            for p in image_dir.glob(f"frame_{idx:05d}_*{ext}")
+            if "_icon" not in p.stem
+        )
         if tagged:
             return tagged[0]
     return None

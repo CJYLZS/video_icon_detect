@@ -9,6 +9,7 @@ from pathlib import Path
 
 from frame_source import FrameSource, resolve_media_source
 from icon_roi import DEFAULT_TEMPLATE_BIN, crop_detect_roi, detect_frame, load_template
+from paths import DEFAULT_VIDEO
 from sampling import resolve_frame_indices
 
 
@@ -105,7 +106,7 @@ def main() -> None:
     if not DEFAULT_TEMPLATE_BIN.is_file():
         raise SystemExit("缺少模板，请先运行 template")
 
-    video = Path("test.mp4")
+    video = DEFAULT_VIDEO
     start_sec = float(sys.argv[1]) if len(sys.argv) > 1 else 75.0
     end_sec = float(sys.argv[2]) if len(sys.argv) > 2 else 80.0
     extract_fps = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
