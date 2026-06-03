@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 
 from icon_roi import TEMPLATE_DIR, crop_detect_roi
-from media_io import parse_frame_index_from_path
+from frame_source import parse_frame_index_from_path
 
 CLASSIFIER_PATH = TEMPLATE_DIR / "icon_classifier.pt"
 CLASSIFIER_INPUT = 64

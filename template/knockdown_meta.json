@@ -1,6 +1,6 @@
 {
   "frame_index": null,
-  "source": "D:\\code\\video_icon_detect\\frames\\frame_02725_t00045615ms.jpg",
+  "source": "D:\\code\\video_edit\\frames\\frame_02671_t00044715ms.jpg",
   "roi_offset": [
     1133,
     886
@@ -11,7 +11,7 @@
   ],
   "ref_box_roi": {
     "x1": 21.0,
-    "y1": 7.0,
+    "y1": 8.0,
     "x2": 73.0,
     "y2": 43.0
   },

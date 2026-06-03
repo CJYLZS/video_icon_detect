@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-import cv2
-
-from classifier import classifier_prob, load_classifier, train_classifier
+from classifier import train_classifier
+from extract import extract_frames
+from frame_source import FrameSource, load_bgr, resolve_media_source
 from icon_roi import (
     DEFAULT_MATCH_THRESH,
     DEFAULT_TEMPLATE_BIN,
@@ -18,35 +17,19 @@ from icon_roi import (
     DETECT_ROI_H,
     DETECT_ROI_W,
     build_roi_template,
-    crop_detect_roi,
-    detect_frame,
     detect_roi_rect,
-    draw_detection,
-    load_template,
-    load_template_meta,
 )
-from media_io import (
-    DEFAULT_VIDEO,
-    OUTPUT_DIR,
-    ROI_CHECK_DIR,
-    collect_extract_indices,
-    extract_frames,
-    load_bgr,
-    load_frame,
-    open_video,
-    resolve_infer_indices,
-    resolve_media_source,
-    sample_step,
-)
+from infer import FrameDetection, InferConfig, iter_detections, save_detection_image
+from paths import OUTPUT_DIR, ROI_CHECK_DIR
 from preview import export_roi_preview
+from sampling import resolve_frame_indices, sample_step
 
 
 def cmd_extract(args: argparse.Namespace) -> None:
     if not args.video.is_file():
         raise FileNotFoundError(f"视频不存在: {args.video}")
 
-    _, total, video_fps = open_video(args.video)
-    indices = collect_extract_indices(args, args.video, total, video_fps)
+    indices, total, video_fps = resolve_frame_indices(args, args.video)
     if not indices:
         raise SystemExit("没有可提取的帧")
 
@@ -92,103 +75,88 @@ def cmd_train(args: argparse.Namespace) -> None:
     )
 
 
+def _format_hit_line(item: FrameDetection) -> str:
+    det = item.detection
+    line = (
+        f"帧 {item.frame_index:5d} ({item.time_sec:6.2f}s) [{det['method']}] "
+        f"score={det['score']:.3f} bin={det['bin_score']:.3f} zncc={det['zncc_score']:.3f}"
+    )
+    if item.cls_prob is not None:
+        line += f" cls={item.cls_prob:.3f}"
+    return line
+
+
+def _print_roi(sample) -> None:
+    rx0, ry0, rx1, ry1 = detect_roi_rect(sample.shape)
+    print(
+        f"ROI: ({DETECT_ROI_CX:.0%},{DETECT_ROI_CY:.0%}) "
+        f"{DETECT_ROI_W:.0%}×{DETECT_ROI_H:.0%} -> ({rx0},{ry0})-({rx1},{ry1})"
+    )
+
+
 def cmd_infer(args: argparse.Namespace) -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    video = args.video
-    image_dir = args.image_dir
+    if not args.video.is_file():
+        raise FileNotFoundError(f"视频不存在: {args.video}")
 
     if not DEFAULT_TEMPLATE_BIN.is_file():
         raise SystemExit("模板不存在，请先: python main.py template --image <参考图>")
 
-    tpl_bin, tpl_gray, tpl_mask, meta = load_template()
-    cls_bundle = load_classifier() if args.use_classifier else None
     if args.use_classifier:
-        if not cls_bundle:
-            raise FileNotFoundError("分类器不存在，请先 python main.py train ...")
         print(f"模式: template + 分类器 (cls>={args.cls_thresh})")
     else:
         print("模式: 固定 ROI 二值 template + ZNCC")
 
-    fps, total = 30.0, 0
-    if image_dir:
-        pass
-    elif video and video.is_file():
-        _, total, fps = open_video(video)
-    else:
-        raise FileNotFoundError("请指定有效的 --video 或 --image-dir")
-
-    indices = resolve_infer_indices(
-        total,
-        fps,
-        frames=args.frame,
-        seconds=args.seconds,
-        image_dir=image_dir,
-        start_frame=args.start_frame,
-        end_frame=args.end_frame,
-        step=args.step,
-    )
-    if not indices and image_dir:
-        indices = resolve_infer_indices(0, fps, frames=None, seconds=None, image_dir=image_dir)
+    indices, total, fps = resolve_frame_indices(args, args.video)
     if not indices:
-        raise SystemExit("无检测帧，请指定 --frame / --start-frame 或 --image-dir")
+        raise SystemExit("无检测帧，请指定 --fps 或时间范围（--start-sec/--end-sec）")
 
-    det_video, det_image_dir = resolve_media_source(video or DEFAULT_VIDEO, image_dir)
-    sample = load_frame(det_video, det_image_dir, indices[0])
-    if sample is not None:
-        rx0, ry0, rx1, ry1 = detect_roi_rect(sample.shape)
-        print(
-            f"ROI: ({DETECT_ROI_CX:.0%},{DETECT_ROI_CY:.0%}) "
-            f"{DETECT_ROI_W:.0%}×{DETECT_ROI_H:.0%} -> ({rx0},{ry0})-({rx1},{ry1})"
-        )
+    print(f"视频: {args.video.name}, 总帧数: {total}, 原始 fps: {fps:.2f}")
+    if args.fps is not None:
+        step = sample_step(fps, args.fps)
+        print(f"采样频率: {args.fps} 张/秒 -> 每隔 {step} 帧取 1 张")
+    print(f"将检测 {len(indices)} 帧: {indices[:8]}{'...' if len(indices) > 8 else ''}")
     print(f"检测 {len(indices)} 帧, 阈值={args.match_thresh:.2f}")
 
-    hits = 0
-    hit_frames: list[int] = []
-    skipped = 0
+    config = InferConfig(
+        video=args.video,
+        indices=indices,
+        fps=fps,
+        image_dir=args.image_dir,
+        match_thresh=args.match_thresh,
+        use_classifier=args.use_classifier,
+        cls_thresh=args.cls_thresh,
+    )
+
     verbose = len(indices) <= 35
-    cls_model, cls_device = cls_bundle if cls_bundle else (None, None)
+    skipped = 0
+    hits: list[FrameDetection] = []
 
-    for idx in indices:
-        frame = load_frame(det_video, det_image_dir, idx)
-        if frame is None:
-            skipped += 1
-            continue
-        roi, _ = crop_detect_roi(frame)
-        cls_p = classifier_prob(roi, cls_model, cls_device) if cls_model is not None else None
+    det_video, det_image_dir = resolve_media_source(args.video, args.image_dir)
+    with FrameSource(det_video, det_image_dir) as frame_src:
+        roi_printed = False
+        for item in iter_detections(config, frame_src=frame_src):
+            if item is None:
+                skipped += 1
+                continue
+            if not roi_printed:
+                _print_roi(item.frame)
+                roi_printed = True
+            if item.detection["present"]:
+                hits.append(item)
+                line = _format_hit_line(item)
+                print(f"\n--- {line} ---" if verbose else line)
+            elif verbose:
+                print(f"\n--- 帧 {item.frame_index} ({item.time_sec:.2f}s) 未检出 ---")
 
-        det = detect_frame(
-            frame,
-            tpl_bin,
-            tpl_gray,
-            tpl_mask,
-            meta,
-            match_thresh=args.match_thresh,
-            cls_prob=cls_p,
-            cls_thresh=args.cls_thresh,
-            require_classifier=args.use_classifier,
-        )
-        t_sec = idx / fps if fps else 0.0
-        if det["present"]:
-            hits += 1
-            hit_frames.append(idx)
-            line = (
-                f"帧 {idx:5d} ({t_sec:6.2f}s) [{det['method']}] "
-                f"score={det['score']:.3f} bin={det['bin_score']:.3f} zncc={det['zncc_score']:.3f}"
-            )
-            if cls_p is not None:
-                line += f" cls={cls_p:.3f}"
-            print(f"\n--- {line} ---" if verbose else line)
-        elif verbose:
-            print(f"\n--- 帧 {idx} ({t_sec:.2f}s) 未检出 ---")
-
-        if args.save_images:
-            cv2.imwrite(str(args.output_dir / f"frame_{idx:05d}_icon.jpg"), draw_detection(frame, det))
+            if args.save_images and (item.detection["present"] or not args.save_hits_only):
+                save_detection_image(args.output_dir, item)
 
     if skipped:
         print(f"警告: {skipped}/{len(indices)} 帧无法读取（请检查 frames 文件名是否与帧号一致）")
-    print(f"\n完成: {hits}/{len(indices)} 帧命中")
-    if hit_frames:
-        print(f"命中帧: {hit_frames}")
+    print(f"\n完成: {len(hits)}/{len(indices)} 帧命中")
+    if hits:
+        print(f"命中帧: {[h.frame_index for h in hits]}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -199,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
   python main.py extract --video test.mp4 --output-dir frames --start-sec 38 --end-sec 45 --fps 5
   python main.py template --image frames/frame_00153.jpg
   python main.py train --image-dir frames --positive-from 153
-  python main.py infer --image-dir frames --output-dir output/icon_detect
+  python main.py infer --video test.mp4 --image-dir frames --start-sec 88 --end-sec 90 --fps 5 --output-dir output/icon_detect
 """,
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -251,20 +219,35 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.set_defaults(func=cmd_train)
 
-    inf = sub.add_parser("infer", help="对视频或帧目录推理")
-    src = inf.add_mutually_exclusive_group(required=True)
-    src.add_argument("--video", type=Path)
-    src.add_argument("--image-dir", type=Path)
+    inf = sub.add_parser("infer", help="对视频按时间范围推理")
+    inf.add_argument("--video", type=Path, required=True)
+    inf.add_argument(
+        "--image-dir",
+        type=Path,
+        help="可选，从已抽帧目录读取图片（帧号须与 --video 时间采样一致）",
+    )
     inf.add_argument("--output-dir", type=Path, default=OUTPUT_DIR / "icon_detect")
-    inf.add_argument("--frame", type=int, action="append")
-    inf.add_argument("--start-frame", type=int)
-    inf.add_argument("--end-frame", type=int)
-    inf.add_argument("--step", type=int, default=1)
-    inf.add_argument("--seconds", type=float, action="append")
+    r = inf.add_argument_group("范围")
+    r.add_argument("--start-sec", type=float)
+    r.add_argument("--end-sec", type=float)
+    r.add_argument("--step", type=int, default=1, help="每隔多少帧取 1 张（与 --fps 二选一，--fps 优先）")
+    inf.add_argument(
+        "--fps",
+        type=float,
+        default=None,
+        metavar="HZ",
+        help="采样频率（每秒检测张数），按视频原始 fps 自动换算步长；可单独使用表示检测全片",
+    )
     inf.add_argument("--match-thresh", type=float, default=DEFAULT_MATCH_THRESH)
     inf.add_argument("--use-classifier", action="store_true")
     inf.add_argument("--cls-thresh", type=float, default=0.5)
     inf.add_argument("--save-images", action=argparse.BooleanOptionalAction, default=True)
+    inf.add_argument(
+        "--save-hits-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="仅保存检出击倒图标的帧（默认开启；--no-save-hits-only 保存全部检测帧）",
+    )
     inf.set_defaults(func=cmd_infer)
 
     return p

@@ -71,10 +71,15 @@ python -m venv .venv
 | 文件 | 说明 |
 |------|------|
 | `main.py` | CLI 入口 |
+| `infer.py` | 检测流水线（读帧 + 模板/分类器） |
+| `frame_source.py` | `FrameSource`、视频/图片读帧 |
+| `sampling.py` | 按时间范围规划帧索引 |
+| `extract.py` | 视频抽帧导出 |
 | `icon_roi.py` | ROI、二值化、template 匹配 |
-| `media_io.py` | 视频/帧读写、抽帧 |
+| `video_index.py` | ffprobe PTS 索引 |
 | `classifier.py` | 可选 CNN 分类器 |
 | `preview.py` | 模板 ROI 预览图 |
+| `media_io.py` | 兼容 re-export（旧 import 仍可用） |
 
 `extract_frames.py` / `detect_icon.py` 仅为旧命令兼容，新用法请用 `main.py`。
 
