@@ -114,8 +114,8 @@ def kill_intervals_to_clip_ranges(
     *,
     window_end: float,
     video_duration: float,
-    pad_before: float = 1.0,
-    pad_after: float = 1.0,
+    pad_before: float = 2.0,
+    pad_after: float = 0.5,
 ) -> list[TimeRange]:
     """击杀区间 -> 剪辑区间：前后各留 pad；最后一段延伸到 min(window_end, 视频结束)。"""
     if not kills:
@@ -153,8 +153,8 @@ def build_clip_plan(
     index: VideoPtsIndex,
     *,
     window_end: float,
-    pad_before: float = 1.0,
-    pad_after: float = 1.0,
+    pad_before: float = 2.0,
+    pad_after: float = 0.5,
     max_hit_gap: float = 2.0,
     merge_gap: float = 2.0,
 ) -> ClipPlan:
@@ -316,8 +316,8 @@ def run_clip(
     output_path: Path,
     segments_dir: Path | None = None,
     meta_path: Path | None = None,
-    pad_before: float = 1.0,
-    pad_after: float = 1.0,
+    pad_before: float = 2,
+    pad_after: float = 0.5,
     max_hit_gap: float = 2.0,
     merge_gap: float = 2.0,
     show_progress: bool = True,

@@ -13,6 +13,7 @@ from classifier import classifier_prob, load_classifier
 from frame_source import FrameSource, resolve_media_source
 from progress import print_progress
 from icon_roi import (
+    DEFAULT_CLS_THRESH,
     DEFAULT_MATCH_THRESH,
     crop_detect_roi,
     detect_frame,
@@ -31,7 +32,7 @@ class InferConfig:
     match_thresh: float = DEFAULT_MATCH_THRESH
     use_classifier: bool = False
     cls_only: bool = False
-    cls_thresh: float = 0.5
+    cls_thresh: float = DEFAULT_CLS_THRESH
 
 
 @dataclass

@@ -21,6 +21,7 @@ DETECT_ROI_W = 0.04
 DETECT_ROI_H = 0.03
 BIN_THRESH = 185
 DEFAULT_MATCH_THRESH = 0.75
+DEFAULT_CLS_THRESH = 0.7
 
 
 def detect_roi_rect(frame_shape: tuple[int, ...]) -> tuple[int, int, int, int]:
@@ -175,7 +176,7 @@ def detect_frame(
     *,
     match_thresh: float = DEFAULT_MATCH_THRESH,
     cls_prob: float | None = None,
-    cls_thresh: float = 0.5,
+    cls_thresh: float = DEFAULT_CLS_THRESH,
     require_classifier: bool = False,
     cls_only: bool = False,
 ) -> dict:

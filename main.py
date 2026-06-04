@@ -10,6 +10,7 @@ from classifier import train_classifier
 from extract import export_frames_from_icons, extract_frames
 from frame_source import FrameSource, load_bgr, resolve_media_source
 from icon_roi import (
+    DEFAULT_CLS_THRESH,
     DEFAULT_MATCH_THRESH,
     DEFAULT_TEMPLATE_BIN,
     DEFAULT_TEMPLATE_META,
@@ -261,7 +262,7 @@ def _add_classifier_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="仅用分类器判定（cls>=阈值即命中，忽略模板阈值）",
     )
-    parser.add_argument("--cls-thresh", type=float, default=0.5)
+    parser.add_argument("--cls-thresh", type=float, default=DEFAULT_CLS_THRESH)
 
 
 def _add_detect_args(parser: argparse.ArgumentParser) -> None:
@@ -450,8 +451,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_time_range_group(cl)
     _add_fps_arg(cl, required=True)
     _add_detect_args(cl)
-    cl.add_argument("--pad-before", type=float, default=1.0, help="击杀开始前保留秒数")
-    cl.add_argument("--pad-after", type=float, default=1.0, help="非最后一段击杀结束后保留秒数")
+    cl.add_argument("--pad-before", type=float, default=2, help="击杀开始前保留秒数")
+    cl.add_argument("--pad-after", type=float, default=0.5, help="非最后一段击杀结束后保留秒数")
     cl.add_argument(
         "--max-hit-gap",
         type=float,
