@@ -97,7 +97,7 @@ frames/
   --meta-json output/clips/ranges.json
 ```
 
-规则：每段击杀取「开始−1s ~ 结束+1s」；相邻击杀间隔 &lt; 2s 则合并；**最后一段**延伸到 `min(--end-sec, 视频结束)`（未指定 `--end-sec` 时为视频结尾）。
+规则：每段击杀取「开始−pad_before ~ 结束+pad_after」；相邻击杀间隔 &lt; 2s 则合并；集锦末尾会再拼接原视频最后 12 秒。
 
 ## 模块
 

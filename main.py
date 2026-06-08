@@ -297,7 +297,6 @@ def cmd_clip(args: argparse.Namespace) -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     plan = run_clip(
         config,
-        window_end=end_sec,
         output_path=args.output,
         segments_dir=args.segments_dir,
         meta_path=args.meta_json,
@@ -452,7 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_fps_arg(cl, required=True)
     _add_detect_args(cl)
     cl.add_argument("--pad-before", type=float, default=2, help="击杀开始前保留秒数")
-    cl.add_argument("--pad-after", type=float, default=0.5, help="非最后一段击杀结束后保留秒数")
+    cl.add_argument("--pad-after", type=float, default=0.5, help="击杀结束后保留秒数")
     cl.add_argument(
         "--max-hit-gap",
         type=float,

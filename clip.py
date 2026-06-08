@@ -109,28 +109,42 @@ def merge_adjacent_kill_intervals(
     return merged
 
 
+TAIL_APPEND_SEC = 12.0
+
+
 def kill_intervals_to_clip_ranges(
     kills: list[TimeRange],
     *,
-    window_end: float,
     video_duration: float,
     pad_before: float = 2.0,
     pad_after: float = 0.5,
 ) -> list[TimeRange]:
-    """击杀区间 -> 剪辑区间：前后各留 pad；最后一段延伸到 min(window_end, 视频结束)。"""
+    """击杀区间 -> 剪辑区间：前后各留 pad（含最后一段）。"""
     if not kills:
         return []
     clips: list[TimeRange] = []
-    tail_end = min(window_end, video_duration)
-    for i, k in enumerate(kills):
+    for k in kills:
         start = max(0.0, k.start_sec - pad_before)
-        if i == len(kills) - 1:
-            end = tail_end
-        else:
-            end = min(video_duration, k.end_sec + pad_after)
+        end = min(video_duration, k.end_sec + pad_after)
         if end > start:
             clips.append(TimeRange(start, end))
     return clips
+
+
+def append_video_tail(
+    clips: list[TimeRange],
+    video_duration: float,
+    *,
+    tail_sec: float = TAIL_APPEND_SEC,
+) -> list[TimeRange]:
+    """在集锦末尾追加原视频最后 tail_sec 秒（独立片段，不与前面区间合并）。"""
+    if video_duration <= 0 or tail_sec <= 0:
+        return clips
+    tail_start = max(0.0, video_duration - tail_sec)
+    tail = TimeRange(tail_start, video_duration)
+    if tail.duration_sec <= 0:
+        return clips
+    return [*clips, tail]
 
 
 def merge_overlapping_clip_ranges(ranges: list[TimeRange]) -> list[TimeRange]:
@@ -152,7 +166,6 @@ def build_clip_plan(
     hit_frames: list[int],
     index: VideoPtsIndex,
     *,
-    window_end: float,
     pad_before: float = 2.0,
     pad_after: float = 0.5,
     max_hit_gap: float = 2.0,
@@ -163,12 +176,14 @@ def build_clip_plan(
     kills = merge_adjacent_kill_intervals(kills_before, gap_sec=merge_gap)
     clips_before = kill_intervals_to_clip_ranges(
         kills,
-        window_end=window_end,
         video_duration=index.duration_sec,
         pad_before=pad_before,
         pad_after=pad_after,
     )
-    clips = merge_overlapping_clip_ranges(clips_before)
+    clips = append_video_tail(
+        merge_overlapping_clip_ranges(clips_before),
+        index.duration_sec,
+    )
     return ClipPlan(
         hit_frames=sorted(hit_frames),
         kills_before_merge=kills_before,
@@ -312,7 +327,6 @@ def export_highlight_video(
 def run_clip(
     config: InferConfig,
     *,
-    window_end: float,
     output_path: Path,
     segments_dir: Path | None = None,
     meta_path: Path | None = None,
@@ -333,7 +347,6 @@ def run_clip(
     plan = build_clip_plan(
         hit_frames,
         index,
-        window_end=window_end,
         pad_before=pad_before,
         pad_after=pad_after,
         max_hit_gap=max_hit_gap,
