@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from clip import run_clip
+from clip import ClipPlan, run_clip
 from classifier import train_classifier
 from extract import export_frames_from_icons, extract_frames
 from frame_source import FrameSource, load_bgr, resolve_media_source
@@ -22,7 +22,7 @@ from icon_roi import (
     detect_roi_rect,
 )
 from infer import FrameDetection, InferConfig, iter_detections, save_detection_image
-from paths import CLIPS_DIR, OUTPUT_DIR, ROI_CHECK_DIR
+from paths import CLIPS_DIR, OUTPUT_DIR, ROI_CHECK_DIR, list_videos_in_dir
 from preview import export_roi_preview
 from sampling import resolve_frame_indices, resolve_time_window, sample_step
 
@@ -270,9 +270,78 @@ def _add_detect_args(parser: argparse.ArgumentParser) -> None:
     _add_classifier_args(parser)
 
 
+def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
+    _add_time_range_group(parser)
+    _add_fps_arg(parser, required=True)
+    _add_detect_args(parser)
+    parser.add_argument("--pad-before", type=float, default=2, help="击杀开始前保留秒数")
+    parser.add_argument("--pad-after", type=float, default=0.5, help="击杀结束后保留秒数")
+    parser.add_argument(
+        "--max-hit-gap",
+        type=float,
+        default=2.0,
+        help="相邻命中时刻合并为同一击杀的最大间隔（秒）",
+    )
+    parser.add_argument(
+        "--merge-gap",
+        type=float,
+        default=2.0,
+        help="相邻击杀区间合并的最大间隔（秒，按击杀结束~下一击杀开始）",
+    )
+    parser.add_argument("--no-progress", action="store_true", help="关闭进度条")
+
+
+def _process_clip_video(
+    args: argparse.Namespace,
+    video: Path,
+    output: Path,
+    *,
+    meta_path: Path | None = None,
+    segments_dir: Path | None = None,
+) -> ClipPlan:
+    if not video.is_file():
+        raise FileNotFoundError(f"视频不存在: {video}")
+
+    start_sec, end_sec = resolve_time_window(args, video)
+    clip_args = argparse.Namespace(**vars(args))
+    clip_args.video = video
+    clip_args.start_sec = start_sec
+    clip_args.end_sec = end_sec
+
+    indices, total, fps = resolve_frame_indices(clip_args, video)
+    if not indices:
+        raise SystemExit(f"无检测帧: {video.name}")
+
+    step = sample_step(fps, args.fps)
+    print(f"视频: {video.name}, 总帧数: {total}, 原始 fps: {fps:.2f}")
+    print(f"剪辑范围: {start_sec:.2f}s ~ {end_sec:.2f}s, 采样 {args.fps}/s (步长 {step})")
+    config = _infer_config_from_args(clip_args, indices, fps)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    return run_clip(
+        config,
+        output_path=output,
+        segments_dir=segments_dir,
+        meta_path=meta_path,
+        pad_before=args.pad_before,
+        pad_after=args.pad_after,
+        max_hit_gap=args.max_hit_gap,
+        merge_gap=args.merge_gap,
+        show_progress=not args.no_progress,
+    )
+
+
+def _print_clip_result(plan: ClipPlan, output: Path, meta_path: Path | None) -> None:
+    print(f"\n{plan.summary_line()}")
+    print(f"\n集锦片段 {plan.clip_count} 段:")
+    for i, c in enumerate(plan.clips, 1):
+        print(f"  #{i} {c.start_sec:.2f}s ~ {c.end_sec:.2f}s ({c.duration_sec:.2f}s)")
+    print(f"\n集锦已导出: {output.resolve()}")
+    if meta_path:
+        print(f"区间 JSON: {meta_path.resolve()}")
+
+
 def cmd_clip(args: argparse.Namespace) -> None:
-    if not args.video.is_file():
-        raise FileNotFoundError(f"视频不存在: {args.video}")
     _ensure_template(cls_only=args.cls_only)
     _print_detect_mode(
         cls_only=args.cls_only,
@@ -281,39 +350,61 @@ def cmd_clip(args: argparse.Namespace) -> None:
         label="检测模式",
     )
 
-    start_sec, end_sec = resolve_time_window(args, args.video)
-    args.start_sec = start_sec
-    args.end_sec = end_sec
-
-    indices, total, fps = resolve_frame_indices(args, args.video)
-    if not indices:
-        raise SystemExit("无检测帧")
-
-    step = sample_step(fps, args.fps)
-    print(f"视频: {args.video.name}, 总帧数: {total}, 原始 fps: {fps:.2f}")
-    print(f"剪辑范围: {start_sec:.2f}s ~ {end_sec:.2f}s, 采样 {args.fps}/s (步长 {step})")
-    config = _infer_config_from_args(args, indices, fps)
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    plan = run_clip(
-        config,
-        output_path=args.output,
-        segments_dir=args.segments_dir,
+    plan = _process_clip_video(
+        args,
+        args.video,
+        args.output,
         meta_path=args.meta_json,
-        pad_before=args.pad_before,
-        pad_after=args.pad_after,
-        max_hit_gap=args.max_hit_gap,
-        merge_gap=args.merge_gap,
-        show_progress=not args.no_progress,
+        segments_dir=args.segments_dir,
+    )
+    _print_clip_result(plan, args.output, args.meta_json)
+
+
+def cmd_clip_batch(args: argparse.Namespace) -> None:
+    if not args.input_dir.is_dir():
+        raise NotADirectoryError(f"输入目录不存在: {args.input_dir}")
+
+    videos = list_videos_in_dir(args.input_dir)
+    if not videos:
+        raise SystemExit(f"输入目录内无视频文件: {args.input_dir}")
+
+    _ensure_template(cls_only=args.cls_only)
+    _print_detect_mode(
+        cls_only=args.cls_only,
+        use_classifier=args.use_classifier,
+        cls_thresh=args.cls_thresh,
+        label="检测模式",
     )
 
-    print(f"\n{plan.summary_line()}")
-    print(f"\n集锦片段 {plan.clip_count} 段:")
-    for i, c in enumerate(plan.clips, 1):
-        print(f"  #{i} {c.start_sec:.2f}s ~ {c.end_sec:.2f}s ({c.duration_sec:.2f}s)")
-    print(f"\n集锦已导出: {args.output.resolve()}")
-    if args.meta_json:
-        print(f"区间 JSON: {args.meta_json.resolve()}")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.meta_dir:
+        args.meta_dir.mkdir(parents=True, exist_ok=True)
+    if args.segments_dir:
+        args.segments_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"输入目录: {args.input_dir.resolve()}")
+    print(f"输出目录: {args.output_dir.resolve()}")
+    print(f"共 {len(videos)} 个视频，按文件名顺序处理")
+
+    for i, video in enumerate(videos, 1):
+        print(f"\n{'=' * 60}")
+        print(f"[{i}/{len(videos)}] {video.name}")
+        print("=" * 60)
+
+        output = args.output_dir / video.name
+        meta_path = args.meta_dir / f"{video.stem}.json" if args.meta_dir else None
+        segments_dir = args.segments_dir / video.stem if args.segments_dir else None
+
+        plan = _process_clip_video(
+            args,
+            video,
+            output,
+            meta_path=meta_path,
+            segments_dir=segments_dir,
+        )
+        _print_clip_result(plan, output, meta_path)
+
+    print(f"\n批量完成: {len(videos)} 个视频已写入 {args.output_dir.resolve()}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -327,6 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
   python main.py infer --video test.mp4 --image-dir frames --start-sec 88 --end-sec 90 --fps 5 --output-dir output/icon_detect
   python main.py clip --video test.mp4 --fps 10 --use-classifier -o output/clips/highlight.mp4
   python main.py clip --video test.mp4 --start-sec 70 --end-sec 80 --fps 10 --use-classifier
+  python main.py clip-batch --input-dir input_videos --output-dir output/clips --fps 10 --use-classifier
 """,
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -447,25 +539,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="可选，导出击杀/剪辑区间 JSON",
     )
-    _add_time_range_group(cl)
-    _add_fps_arg(cl, required=True)
-    _add_detect_args(cl)
-    cl.add_argument("--pad-before", type=float, default=2, help="击杀开始前保留秒数")
-    cl.add_argument("--pad-after", type=float, default=0.5, help="击杀结束后保留秒数")
-    cl.add_argument(
-        "--max-hit-gap",
-        type=float,
-        default=2.0,
-        help="相邻命中时刻合并为同一击杀的最大间隔（秒）",
-    )
-    cl.add_argument(
-        "--merge-gap",
-        type=float,
-        default=2.0,
-        help="相邻击杀区间合并的最大间隔（秒，按击杀结束~下一击杀开始）",
-    )
-    cl.add_argument("--no-progress", action="store_true", help="关闭进度条")
+    _add_clip_common_args(cl)
     cl.set_defaults(func=cmd_clip)
+
+    cb = sub.add_parser("clip-batch", help="批量检测击杀并剪辑集锦（输出文件名与输入一致）")
+    cb.add_argument("--input-dir", type=Path, required=True, help="输入视频目录")
+    cb.add_argument("--output-dir", type=Path, required=True, help="输出视频目录")
+    cb.add_argument(
+        "--segments-dir",
+        type=Path,
+        default=None,
+        help="可选，为每个视频创建子目录保存各剪辑片段",
+    )
+    cb.add_argument(
+        "--meta-dir",
+        type=Path,
+        default=None,
+        help="可选，为每个视频导出 {stem}.json 区间元数据",
+    )
+    _add_clip_common_args(cb)
+    cb.set_defaults(func=cmd_clip_batch)
 
     return p
 
