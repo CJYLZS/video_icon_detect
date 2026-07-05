@@ -49,6 +49,17 @@ class VideoPtsIndex:
             return self.pts_sec[i - 1]
         return self.pts_sec[0]
 
+    def frame_for_pts(self, pts_sec: float) -> int:
+        """返回距离指定 PTS 时间最近的帧号（0-based，与 OpenCV 一致）。"""
+        if not self.frame_indices:
+            return 0
+        i = bisect.bisect_left(self.pts_sec, pts_sec)
+        if i >= len(self.pts_sec):
+            return self.frame_indices[-1]
+        if i > 0 and abs(self.pts_sec[i - 1] - pts_sec) < abs(self.pts_sec[i] - pts_sec):
+            return self.frame_indices[i - 1]
+        return self.frame_indices[i]
+
 
 def _video_cache_key(video_path: Path) -> str:
     resolved = str(video_path.resolve())

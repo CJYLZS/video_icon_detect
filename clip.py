@@ -267,6 +267,63 @@ def save_ranges_json(path: Path, plan: ClipPlan, *, merge_gap: float) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def save_clip_manifest(
+    output_path: Path,
+    clips: list[TimeRange],
+    index: VideoPtsIndex,
+    *,
+    source_fps: float,
+    source_video: Path,
+) -> None:
+    """生成片段偏移清单 JSON，写入 output_path（同目录、与视频同名）。"""
+    segments: list[dict] = []
+    output_offset = 0.0
+
+    for i, clip in enumerate(clips):
+        src_start = clip.start_sec
+        src_end = clip.end_sec
+        src_duration = clip.duration_sec
+        src_start_frame = index.frame_for_pts(src_start)
+        src_end_frame = index.frame_for_pts(src_end)
+
+        out_start = output_offset
+        out_end = output_offset + src_duration
+
+        segments.append({
+            "segment": i + 1,
+            "source": {
+                "start_sec": round(src_start, 3),
+                "end_sec": round(src_end, 3),
+                "duration_sec": round(src_duration, 3),
+                "start_frame": src_start_frame,
+                "end_frame": src_end_frame,
+            },
+            "output": {
+                "start_sec": round(out_start, 3),
+                "end_sec": round(out_end, 3),
+                "duration_sec": round(src_duration, 3),
+                "start_frame": int(out_start * source_fps),
+                "end_frame": int(out_end * source_fps),
+            },
+        })
+        output_offset += src_duration
+
+    payload = {
+        "source_video": str(source_video.resolve()),
+        "source_duration_sec": round(index.duration_sec, 3),
+        "source_fps": source_fps,
+        "output_video": str(output_path.resolve()),
+        "output_duration_sec": round(output_offset, 3),
+        "total_segments": len(segments),
+        "segments": segments,
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if not segments:
+        print("      警告: 无片段数据，清单为空")
+
+
 def _extract_segment(video: Path, out: Path, seg: TimeRange) -> None:
     if not FFMPEG.is_file():
         raise FileNotFoundError(f"ffmpeg 不存在: {FFMPEG}")
@@ -433,6 +490,17 @@ def run_clip(
         save_ranges_json(meta_path, plan, merge_gap=merge_gap)
         if show_progress:
             print(f"      区间 JSON: {meta_path}")
+
+    manifest_path = output_path.with_suffix(".json")
+    save_clip_manifest(
+        manifest_path,
+        plan.clips,
+        index,
+        source_fps=config.fps,
+        source_video=config.video,
+    )
+    if show_progress:
+        print(f"      片段清单: {manifest_path}")
 
     if show_progress:
         total_dur = sum(c.duration_sec for c in plan.clips)
