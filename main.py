@@ -292,6 +292,11 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--missile", action="store_true", help="同时检测巡航导弹（OCR）")
     parser.add_argument("--missile-pad-before", type=float, default=7.0, help="导弹片段前延秒数")
     parser.add_argument("--missile-pad-after", type=float, default=4.0, help="导弹片段后延秒数")
+    parser.add_argument(
+        "--no-missile-prefix",
+        action="store_true",
+        help="不在集锦开头额外复制导弹片段（默认会复制一份按时间排序放在开头）",
+    )
 
 
 def _process_clip_video(
@@ -334,6 +339,7 @@ def _process_clip_video(
         enable_missile=args.missile,
         missile_pad_before=args.missile_pad_before,
         missile_pad_after=args.missile_pad_after,
+        missile_prefix=not args.no_missile_prefix,
     )
 
 

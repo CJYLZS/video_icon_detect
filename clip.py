@@ -188,6 +188,7 @@ def build_clip_plan(
     missile_frames: list[int] | None = None,
     missile_pad_before: float = 5.0,
     missile_pad_after: float = 5.0,
+    missile_prefix: bool = True,
 ) -> ClipPlan:
     hit_times = [index.pts_for_frame(f) for f in sorted(hit_frames)]
     kills_before = group_hits_to_kill_intervals(hit_times, max_hit_gap=max_hit_gap)
@@ -218,6 +219,8 @@ def build_clip_plan(
         merge_overlapping_clip_ranges(all_clips_before),
         index.duration_sec,
     )
+    if missile_prefix and m_clips:
+        clips = sorted(m_clips, key=lambda r: r.start_sec) + clips
     return ClipPlan(
         hit_frames=sorted(hit_frames),
         kills_before_merge=kills_before,
@@ -440,6 +443,7 @@ def run_clip(
     enable_missile: bool = False,
     missile_pad_before: float = 5.0,
     missile_pad_after: float = 5.0,
+    missile_prefix: bool = True,
 ) -> ClipPlan:
     if show_progress:
         mode_tag = "检测" if not enable_missile else "击倒 + 导弹检测"
@@ -468,6 +472,7 @@ def run_clip(
         missile_frames=missile_frames if missile_frames else None,
         missile_pad_before=missile_pad_before,
         missile_pad_after=missile_pad_after,
+        missile_prefix=missile_prefix,
     )
 
     if show_progress:
@@ -477,6 +482,8 @@ def run_clip(
             print(f"      （相邻图标时段按 {merge_gap}s 合并了 {plan.kill_merged_count} 段）")
         if plan.missile_event_count:
             print(f"      （导弹区间前 {missile_pad_before}s 后 {missile_pad_after}s）")
+        if missile_prefix and plan.missile_event_count:
+            print(f"      （导弹片段已复制到集锦开头，共 {plan.missile_event_count} 段）")
         if plan.clip_merged_count:
             print(f"      （集锦区间重叠合并了 {plan.clip_merged_count} 段）")
         elif plan.clip_count == (plan.icon_event_count + plan.missile_event_count):
