@@ -290,8 +290,8 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--no-progress", action="store_true", help="关闭进度条")
     parser.add_argument("--missile", action="store_true", help="同时检测巡航导弹（OCR）")
-    parser.add_argument("--missile-pad-before", type=float, default=5.0, help="导弹片段前延秒数")
-    parser.add_argument("--missile-pad-after", type=float, default=5.0, help="导弹片段后延秒数")
+    parser.add_argument("--missile-pad-before", type=float, default=7.0, help="导弹片段前延秒数")
+    parser.add_argument("--missile-pad-after", type=float, default=4.0, help="导弹片段后延秒数")
 
 
 def _process_clip_video(
