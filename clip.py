@@ -71,7 +71,8 @@ class ClipPlan:
 
     @property
     def clip_merged_count(self) -> int:
-        return len(self.clips_before_overlap) - len(self.clips)
+        merged = merge_overlapping_clip_ranges(self.clips_before_overlap)
+        return len(self.clips_before_overlap) - len(merged)
 
     def summary_line(self) -> str:
         base = (
