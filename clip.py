@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from infer import InferConfig, collect_hit_frame_indices
+from infer import InferConfig, collect_combined, collect_hit_frame_indices
 from paths import FFMPEG
 from progress import print_progress, print_step
 from video_index import VideoPtsIndex, load_or_build_index
@@ -34,15 +34,26 @@ class ClipPlan:
     kills: list[TimeRange]
     clips_before_overlap: list[TimeRange]
     clips: list[TimeRange]
+    missile_frames: list[int] | None = None
+    missile_kills_before: list[TimeRange] | None = None
+    missile_kills: list[TimeRange] | None = None
 
     @property
     def hit_count(self) -> int:
         return len(self.hit_frames)
 
     @property
+    def missile_hit_count(self) -> int:
+        return len(self.missile_frames) if self.missile_frames is not None else 0
+
+    @property
     def icon_event_count(self) -> int:
         """击倒图标连续出现的时段数（≠ 真实击倒次数，近距多杀会被合并）。"""
         return len(self.kills)
+
+    @property
+    def missile_event_count(self) -> int:
+        return len(self.missile_kills) if self.missile_kills is not None else 0
 
     @property
     def knockdown_count(self) -> int:
@@ -63,11 +74,14 @@ class ClipPlan:
         return len(self.clips_before_overlap) - len(self.clips)
 
     def summary_line(self) -> str:
-        return (
+        base = (
             f"采样命中 {self.hit_count} 次 -> "
-            f"图标时段 {self.icon_event_count} 段 -> "
-            f"集锦 {self.clip_count} 段"
+            f"图标时段 {self.icon_event_count} 段"
         )
+        if self.missile_hit_count:
+            base += f"，导弹命中 {self.missile_hit_count} 次 -> {self.missile_event_count} 段"
+        base += f" -> 集锦 {self.clip_count} 段"
+        return base
 
 
 def group_hits_to_kill_intervals(
@@ -170,26 +184,48 @@ def build_clip_plan(
     pad_after: float = 0.5,
     max_hit_gap: float = 2.0,
     merge_gap: float = 2.0,
+    missile_frames: list[int] | None = None,
+    missile_pad_before: float = 5.0,
+    missile_pad_after: float = 5.0,
 ) -> ClipPlan:
     hit_times = [index.pts_for_frame(f) for f in sorted(hit_frames)]
     kills_before = group_hits_to_kill_intervals(hit_times, max_hit_gap=max_hit_gap)
     kills = merge_adjacent_kill_intervals(kills_before, gap_sec=merge_gap)
-    clips_before = kill_intervals_to_clip_ranges(
+    kd_clips = kill_intervals_to_clip_ranges(
         kills,
         video_duration=index.duration_sec,
         pad_before=pad_before,
         pad_after=pad_after,
     )
+
+    m_kills_before: list[TimeRange] = []
+    m_kills: list[TimeRange] = []
+    m_clips: list[TimeRange] = []
+    if missile_frames:
+        m_times = [index.pts_for_frame(f) for f in sorted(missile_frames)]
+        m_kills_before = group_hits_to_kill_intervals(m_times, max_hit_gap=max_hit_gap)
+        m_kills = merge_adjacent_kill_intervals(m_kills_before, gap_sec=merge_gap)
+        m_clips = kill_intervals_to_clip_ranges(
+            m_kills,
+            video_duration=index.duration_sec,
+            pad_before=missile_pad_before,
+            pad_after=missile_pad_after,
+        )
+
+    all_clips_before = sorted(kd_clips + m_clips, key=lambda r: r.start_sec)
     clips = append_video_tail(
-        merge_overlapping_clip_ranges(clips_before),
+        merge_overlapping_clip_ranges(all_clips_before),
         index.duration_sec,
     )
     return ClipPlan(
         hit_frames=sorted(hit_frames),
         kills_before_merge=kills_before,
         kills=kills,
-        clips_before_overlap=clips_before,
+        clips_before_overlap=all_clips_before,
         clips=clips,
+        missile_frames=sorted(missile_frames) if missile_frames else None,
+        missile_kills_before=m_kills_before if missile_frames else None,
+        missile_kills=m_kills if missile_frames else None,
     )
 
 
@@ -220,6 +256,14 @@ def save_ranges_json(path: Path, plan: ClipPlan, *, merge_gap: float) -> None:
         "kill_intervals": kill_intervals,
         "clip_ranges": clip_ranges,
     }
+    if plan.missile_frames is not None:
+        payload["summary"]["missile_hits"] = plan.missile_hit_count
+        payload["summary"]["missile_events"] = plan.missile_event_count
+        payload["missile_frames"] = plan.missile_frames
+        if plan.missile_kills_before:
+            payload["missile_intervals_before_merge"] = [asdict(k) for k in plan.missile_kills_before]
+        if plan.missile_kills:
+            payload["missile_intervals"] = [asdict(k) for k in plan.missile_kills]
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -335,14 +379,26 @@ def run_clip(
     max_hit_gap: float = 2.0,
     merge_gap: float = 2.0,
     show_progress: bool = True,
+    enable_missile: bool = False,
+    missile_pad_before: float = 5.0,
+    missile_pad_after: float = 5.0,
 ) -> ClipPlan:
     if show_progress:
-        print_step(1, 3, f"建立时间索引并检测（{len(config.indices)} 帧）...")
+        mode_tag = "检测" if not enable_missile else "击倒 + 导弹检测"
+        print_step(1, 3, f"建立时间索引并{mode_tag}（{len(config.indices)} 帧）...")
 
     index = load_or_build_index(config.video)
-    hit_frames = collect_hit_frame_indices(config, show_progress=show_progress)
-    if not hit_frames:
-        raise SystemExit("未检测到击倒图标，无法生成集锦")
+
+    if enable_missile:
+        hit_frames, missile_frames = collect_combined(
+            config, enable_missile=True, show_progress=show_progress
+        )
+    else:
+        hit_frames = collect_hit_frame_indices(config, show_progress=show_progress)
+        missile_frames = []
+
+    if not hit_frames and not missile_frames:
+        raise SystemExit("未检测到任何事件，无法生成集锦")
 
     plan = build_clip_plan(
         hit_frames,
@@ -351,6 +407,9 @@ def run_clip(
         pad_after=pad_after,
         max_hit_gap=max_hit_gap,
         merge_gap=merge_gap,
+        missile_frames=missile_frames if missile_frames else None,
+        missile_pad_before=missile_pad_before,
+        missile_pad_after=missile_pad_after,
     )
 
     if show_progress:
@@ -358,11 +417,13 @@ def run_clip(
         print(f"      {plan.summary_line()}")
         if plan.kill_merged_count:
             print(f"      （相邻图标时段按 {merge_gap}s 合并了 {plan.kill_merged_count} 段）")
+        if plan.missile_event_count:
+            print(f"      （导弹区间前 {missile_pad_before}s 后 {missile_pad_after}s）")
         if plan.clip_merged_count:
             print(f"      （集锦区间重叠合并了 {plan.clip_merged_count} 段）")
-        elif plan.icon_event_count == plan.clip_count:
+        elif plan.clip_count == (plan.icon_event_count + plan.missile_event_count):
             print(
-                "      （每段图标时段对应一段集锦；未再合并时后两项相同）"
+                "      （每段事件对应一段集锦；未再合并时后两项相同）"
             )
         print(
             "      说明: 图标时段由采样命中合并得到，间隔小于阈值的相邻段会算作同一段，"

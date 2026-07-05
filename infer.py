@@ -11,6 +11,7 @@ import numpy as np
 
 from classifier import classifier_prob, load_classifier
 from frame_source import FrameSource, resolve_media_source
+from missile_detect import detect_missile_text
 from progress import print_progress
 from icon_roi import (
     DEFAULT_CLS_THRESH,
@@ -144,6 +145,32 @@ def collect_hit_frame_indices(
         if show_progress:
             print_progress(n, total, label="检测", detail=f"命中 {len(hits)}")
     return hits
+
+
+def collect_combined(
+    config: InferConfig,
+    *,
+    enable_missile: bool = False,
+    show_progress: bool = False,
+) -> tuple[list[int], list[int]]:
+    """单次遍历：击倒优先，未命中时尝试导弹 OCR。
+    返回 (hit_frames, missile_frames)，均为帧号列表。"""
+    total = len(config.indices)
+    hits: list[int] = []
+    missiles: list[int] = []
+    for n, item in enumerate(iter_detections(config), start=1):
+        if item is None:
+            continue
+        if item.detection["present"]:
+            hits.append(item.frame_index)
+        elif enable_missile and detect_missile_text(item.frame):
+            missiles.append(item.frame_index)
+        if show_progress:
+            detail = f"击倒 {len(hits)}"
+            if enable_missile:
+                detail += f" 导弹 {len(missiles)}"
+            print_progress(n, total, label="检测", detail=detail)
+    return hits, missiles
 
 
 def save_detection_image(output_dir: Path, item: FrameDetection) -> None:

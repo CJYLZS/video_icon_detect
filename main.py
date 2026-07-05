@@ -289,6 +289,9 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
         help="相邻击杀区间合并的最大间隔（秒，按击杀结束~下一击杀开始）",
     )
     parser.add_argument("--no-progress", action="store_true", help="关闭进度条")
+    parser.add_argument("--missile", action="store_true", help="同时检测巡航导弹（OCR）")
+    parser.add_argument("--missile-pad-before", type=float, default=5.0, help="导弹片段前延秒数")
+    parser.add_argument("--missile-pad-after", type=float, default=5.0, help="导弹片段后延秒数")
 
 
 def _process_clip_video(
@@ -328,6 +331,9 @@ def _process_clip_video(
         max_hit_gap=args.max_hit_gap,
         merge_gap=args.merge_gap,
         show_progress=not args.no_progress,
+        enable_missile=args.missile,
+        missile_pad_before=args.missile_pad_before,
+        missile_pad_after=args.missile_pad_after,
     )
 
 
