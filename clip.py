@@ -25,6 +25,11 @@ class TimeRange:
         return max(0.0, self.end_sec - self.start_sec)
 
 
+@dataclass(frozen=True)
+class LabeledTimeRange(TimeRange):
+    type: str = ""
+
+
 @dataclass
 class ClipPlan:
     """检测命中 -> 图标连续段 -> 集锦片段 的完整规划。"""
@@ -32,8 +37,8 @@ class ClipPlan:
     hit_frames: list[int]
     kills_before_merge: list[TimeRange]
     kills: list[TimeRange]
-    clips_before_overlap: list[TimeRange]
-    clips: list[TimeRange]
+    clips_before_overlap: list[LabeledTimeRange]
+    clips: list[LabeledTimeRange]
     missile_frames: list[int] | None = None
     missile_kills_before: list[TimeRange] | None = None
     missile_kills: list[TimeRange] | None = None
@@ -147,23 +152,23 @@ def kill_intervals_to_clip_ranges(
 
 
 def append_video_tail(
-    clips: list[TimeRange],
+    clips: list[LabeledTimeRange],
     video_duration: float,
     *,
     tail_sec: float = TAIL_APPEND_SEC,
-) -> list[TimeRange]:
-    """在集锦末尾追加原视频最后 tail_sec 秒（独立片段，不与前面区间合并）。"""
+) -> list[LabeledTimeRange]:
+    """在集锦末尾追加原视频最后 tail_sec 秒（独立片段，type='tail'）。"""
     if video_duration <= 0 or tail_sec <= 0:
         return clips
     tail_start = max(0.0, video_duration - tail_sec)
-    tail = TimeRange(tail_start, video_duration)
+    tail = LabeledTimeRange(start_sec=tail_start, end_sec=video_duration, type="tail")
     if tail.duration_sec <= 0:
         return clips
     return [*clips, tail]
 
 
-def merge_overlapping_clip_ranges(ranges: list[TimeRange]) -> list[TimeRange]:
-    """合并重叠或相接的剪辑区间。"""
+def merge_overlapping_clip_ranges(ranges: list[LabeledTimeRange]) -> list[LabeledTimeRange]:
+    """合并重叠或相接的剪辑区间；不同 type 重叠合并后 type 标记为 'mixed'。"""
     if not ranges:
         return []
     ordered = sorted(ranges, key=lambda r: r.start_sec)
@@ -171,7 +176,12 @@ def merge_overlapping_clip_ranges(ranges: list[TimeRange]) -> list[TimeRange]:
     for r in ordered[1:]:
         prev = out[-1]
         if r.start_sec <= prev.end_sec:
-            out[-1] = TimeRange(prev.start_sec, max(prev.end_sec, r.end_sec))
+            merged_type = prev.type if prev.type == r.type else "mixed"
+            out[-1] = LabeledTimeRange(
+                start_sec=prev.start_sec,
+                end_sec=max(prev.end_sec, r.end_sec),
+                type=merged_type,
+            )
         else:
             out.append(r)
     return out
@@ -193,26 +203,32 @@ def build_clip_plan(
     hit_times = [index.pts_for_frame(f) for f in sorted(hit_frames)]
     kills_before = group_hits_to_kill_intervals(hit_times, max_hit_gap=max_hit_gap)
     kills = merge_adjacent_kill_intervals(kills_before, gap_sec=merge_gap)
-    kd_clips = kill_intervals_to_clip_ranges(
-        kills,
-        video_duration=index.duration_sec,
-        pad_before=pad_before,
-        pad_after=pad_after,
-    )
+    kd_clips = [
+        LabeledTimeRange(start_sec=c.start_sec, end_sec=c.end_sec, type="knockdown")
+        for c in kill_intervals_to_clip_ranges(
+            kills,
+            video_duration=index.duration_sec,
+            pad_before=pad_before,
+            pad_after=pad_after,
+        )
+    ]
 
     m_kills_before: list[TimeRange] = []
     m_kills: list[TimeRange] = []
-    m_clips: list[TimeRange] = []
+    m_clips: list[LabeledTimeRange] = []
     if missile_frames:
         m_times = [index.pts_for_frame(f) for f in sorted(missile_frames)]
         m_kills_before = group_hits_to_kill_intervals(m_times, max_hit_gap=max_hit_gap)
         m_kills = merge_adjacent_kill_intervals(m_kills_before, gap_sec=merge_gap)
-        m_clips = kill_intervals_to_clip_ranges(
-            m_kills,
-            video_duration=index.duration_sec,
-            pad_before=missile_pad_before,
-            pad_after=missile_pad_after,
-        )
+        m_clips = [
+            LabeledTimeRange(start_sec=c.start_sec, end_sec=c.end_sec, type="missile")
+            for c in kill_intervals_to_clip_ranges(
+                m_kills,
+                video_duration=index.duration_sec,
+                pad_before=missile_pad_before,
+                pad_after=missile_pad_after,
+            )
+        ]
 
     all_clips_before = sorted(kd_clips + m_clips, key=lambda r: r.start_sec)
     clips = append_video_tail(
@@ -273,7 +289,7 @@ def save_ranges_json(path: Path, plan: ClipPlan, *, merge_gap: float) -> None:
 
 def save_clip_manifest(
     output_path: Path,
-    clips: list[TimeRange],
+    clips: list[LabeledTimeRange],
     index: VideoPtsIndex,
     *,
     source_fps: float,
@@ -295,6 +311,7 @@ def save_clip_manifest(
 
         segments.append({
             "segment": i + 1,
+            "type": clip.type,
             "source": {
                 "start_sec": round(src_start, 3),
                 "end_sec": round(src_end, 3),
@@ -363,7 +380,7 @@ def _extract_segment(video: Path, out: Path, seg: TimeRange) -> None:
 
 def export_highlight_video(
     video: Path,
-    clips: list[TimeRange],
+    clips: list[LabeledTimeRange],
     output_path: Path,
     *,
     segments_dir: Path | None = None,

@@ -178,6 +178,71 @@ def _infer_config_from_args(args: argparse.Namespace, indices: list[int], fps: f
     )
 
 
+def cmd_clip_extract(args: argparse.Namespace) -> None:
+    import json
+
+    meta = json.loads(args.meta_json.read_text(encoding="utf-8"))
+
+    clip_video = args.meta_json.with_suffix(".mp4")
+    if not clip_video.is_file():
+        raise FileNotFoundError(
+            f"未找到对应视频: {clip_video}（JSON 同级目录下无同名 .mp4 文件）"
+        )
+
+    seg = None
+    for s in meta["segments"]:
+        if s["segment"] == args.segment:
+            seg = s
+            break
+    if seg is None:
+        raise SystemExit(
+            f"片段 #{args.segment} 不存在（共 {meta['total_segments']} 段，"
+            f"取值范围 1..{meta['total_segments']}）"
+        )
+
+    out_span = seg["output"]
+    start_sec = out_span["start_sec"]
+    end_sec = out_span["end_sec"]
+    duration = out_span["duration_sec"]
+
+    print(
+        f"片段 #{args.segment} ({seg['type']}): "
+        f"clip {start_sec:.2f}s ~ {end_sec:.2f}s ({duration:.2f}s)"
+    )
+
+    from video_index import load_or_build_index
+
+    index = load_or_build_index(clip_video)
+    total_frames = len(index.pts_sec)
+
+    lo = index.locate_first_at_or_after(start_sec)
+    hi = index.locate_last_at_or_before(end_sec)
+    if lo > hi or lo >= total_frames or hi < 0:
+        raise SystemExit("该片段在视频中无有效帧")
+
+    interval = 1.0 / args.fps
+    indices: list[int] = []
+    t = start_sec
+    while t <= end_sec + 1e-9:
+        idx = index.locate_first_at_or_after(t)
+        if idx > hi:
+            break
+        indices.append(idx)
+        t += interval
+
+    if not indices:
+        raise SystemExit("采样后无帧可提取")
+
+    print(f"将提取 {len(indices)} 帧 (fps={args.fps}) -> {args.output_dir}")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    from extract import extract_frames
+
+    saved = extract_frames(clip_video, args.output_dir, indices, prefix=args.prefix, ext=args.ext)
+
+    print(f"\n完成: {saved}/{len(indices)} 帧写入 {args.output_dir}")
+
+
 def cmd_infer(args: argparse.Namespace) -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if not args.video.is_file():
@@ -515,6 +580,15 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--batch-size", type=int, default=8)
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.set_defaults(func=cmd_train)
+
+    ce = sub.add_parser("clip-extract", help="从 clip 视频中提取指定片段的帧到图片目录（用于补充训练样本）")
+    ce.add_argument("--meta-json", type=Path, required=True, metavar="JSON", help="clip 输出的片段清单 JSON")
+    ce.add_argument("--segment", type=int, required=True, metavar="N", help="片段序号（1-based）")
+    ce.add_argument("--output-dir", type=Path, default=Path("data/negative"), help="输出目录（默认 data/negative/）")
+    ce.add_argument("--fps", type=float, required=True, metavar="HZ", help="采样频率（每秒帧数）")
+    ce.add_argument("--prefix", default="frame", help="输出文件名前缀（默认 frame）")
+    ce.add_argument("--ext", default="jpg", choices=("jpg", "png"), help="输出图片格式（默认 jpg）")
+    ce.set_defaults(func=cmd_clip_extract)
 
     inf = sub.add_parser("infer", help="对视频按时间范围推理")
     inf.add_argument("--video", type=Path, required=True)
