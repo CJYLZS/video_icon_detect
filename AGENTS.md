@@ -23,6 +23,7 @@ Single CLI: `python main.py <subcommand>`
 | `infer` | Run detection on video or frame directory |
 | `clip` | Generate kill highlight montage |
 | `clip-batch` | Batch clip across all videos in `input/` |
+| `classify-dir` | CLS-only classification on a directory of images (`classify_dir.py`) |
 
 ## Architecture notes
 
@@ -31,10 +32,29 @@ Single CLI: `python main.py <subcommand>`
   1. Template-only (default)
   2. Template + Classifier (both must pass)
   3. Classifier-only (`--cls-only`)
-- **ROI constants** in `icon_roi.py:20-25`: the icon is expected at 50% X, 55.5% Y of frame, ~4%×3% of frame size. Binary threshold is 185 (`icon_roi.py:24`).
+- **ROI constants** in `icon_roi.py:20-25`: the icon is expected at 50% X, 55.5% Y of frame, ~4%×3% of frame size. Binary threshold is **230** (`icon_roi.py:24`).
 - **Video seeking** relies on `video_index.py` — builds an ffprobe PTS index cached to `output/video_index/` keyed by file path + mtime + size. Stale cache = wrong results if video file changes but index isn't rebuilt.
 - **Frame source** (`frame_source.py`) handles both video (`VideoCapture` with sequential decode optimization) and image directories (`frame_XXXXX.jpg`). Supports `CAP_PROP_ORIENTATION_META` for smartphone videos.
 - **Missile text OCR** (`missile_detect.py`) runs RapidOCR on a green-tinted ROI looking for "后自动引爆".
+
+## classify-dir
+
+Standalone script: `python classify_dir.py <image_dir>`
+
+Runs cls-only classifier on all images in a directory. Prints per-file probability and summary.
+
+```
+python classify_dir.py data/test
+python classify_dir.py data/test --thresh 0.9
+python classify_dir.py data/test -o output/roi_results --save-roi
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `image_dir` | (required) | Directory of images to classify |
+| `--thresh` | 0.7 | Classification threshold |
+| `-o` / `--output-dir` | None | Save ROI crops to this directory |
+| `--save-roi` | False | Also save binarized ROI images |
 
 ## Development
 

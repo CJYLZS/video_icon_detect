@@ -345,33 +345,21 @@ def save_clip_manifest(
         print("      警告: 无片段数据，清单为空")
 
 
-def _extract_segment(video: Path, out: Path, seg: TimeRange) -> None:
+def _extract_segment(
+    video: Path, out: Path, seg: TimeRange, *, use_cuda: bool = False
+) -> None:
     if not FFMPEG.is_file():
         raise FileNotFoundError(f"ffmpeg 不存在: {FFMPEG}")
-    # -ss 必须在 -i 之前：输入侧 seek，避免每段从文件头解码到起点（长视频会极慢）
-    cmd = [
-        str(FFMPEG),
-        "-y",
-        "-ss",
-        f"{seg.start_sec:.3f}",
-        "-i",
-        str(video),
-        "-t",
-        f"{seg.duration_sec:.3f}",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "18",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-movflags",
-        "+faststart",
-        str(out),
-    ]
+    cmd = [str(FFMPEG), "-y"]
+    if use_cuda:
+        cmd += ["-hwaccel", "cuda"]
+    cmd += ["-ss", f"{seg.start_sec:.3f}", "-i", str(video)]
+    cmd += ["-t", f"{seg.duration_sec:.3f}"]
+    if use_cuda:
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p7", "-cq", "18"]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+    cmd += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
@@ -385,6 +373,7 @@ def export_highlight_video(
     *,
     segments_dir: Path | None = None,
     show_progress: bool = True,
+    use_cuda: bool = False,
 ) -> Path:
     """将多段剪辑区间拼接为单个输出视频。"""
     if not clips:
@@ -395,7 +384,7 @@ def export_highlight_video(
     if n == 1:
         if show_progress:
             print_progress(1, 1, label="导出", detail=_fmt_range(clips[0]))
-        _extract_segment(video, output_path, clips[0])
+        _extract_segment(video, output_path, clips[0], use_cuda=use_cuda)
         return output_path
 
     with tempfile.TemporaryDirectory(prefix="kill_clips_") as tmp:
@@ -410,7 +399,7 @@ def export_highlight_video(
                     detail=f"切片 {i + 1}/{n} {_fmt_range(seg)}",
                 )
             part = tmp_dir / f"part_{i:03d}.mp4"
-            _extract_segment(video, part, seg)
+            _extract_segment(video, part, seg, use_cuda=use_cuda)
             parts.append(part)
             if segments_dir is not None:
                 segments_dir.mkdir(parents=True, exist_ok=True)
@@ -461,6 +450,7 @@ def run_clip(
     missile_pad_before: float = 5.0,
     missile_pad_after: float = 5.0,
     missile_prefix: bool = True,
+    use_cuda: bool = False,
 ) -> ClipPlan:
     if show_progress:
         mode_tag = "检测" if not enable_missile else "击倒 + 导弹检测"
@@ -537,5 +527,6 @@ def run_clip(
         output_path,
         segments_dir=segments_dir,
         show_progress=show_progress,
+        use_cuda=use_cuda,
     )
     return plan

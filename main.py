@@ -339,6 +339,7 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
     _add_time_range_group(parser)
     _add_fps_arg(parser, required=True)
     _add_detect_args(parser)
+    parser.add_argument("--gpu", action="store_true", help="导出时使用 CUDA + NVENC 硬件加速编码（需 NVIDIA GPU）")
     parser.add_argument("--pad-before", type=float, default=2, help="击杀开始前保留秒数")
     parser.add_argument("--pad-after", type=float, default=0.5, help="击杀结束后保留秒数")
     parser.add_argument(
@@ -386,6 +387,9 @@ def _process_clip_video(
         raise SystemExit(f"无检测帧: {video.name}")
 
     step = sample_step(fps, args.fps)
+    use_gpu = getattr(args, "gpu", False)
+    if use_gpu:
+        print("GPU 加速: 已启用 (CUDA)")
     print(f"视频: {video.name}, 总帧数: {total}, 原始 fps: {fps:.2f}")
     print(f"剪辑范围: {start_sec:.2f}s ~ {end_sec:.2f}s, 采样 {args.fps}/s (步长 {step})")
     config = _infer_config_from_args(clip_args, indices, fps)
@@ -405,6 +409,7 @@ def _process_clip_video(
         missile_pad_before=args.missile_pad_before,
         missile_pad_after=args.missile_pad_after,
         missile_prefix=not args.no_missile_prefix,
+        use_cuda=use_gpu,
     )
 
 
@@ -601,6 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_time_range_group(inf)
     _add_fps_arg(inf, required=False)
     _add_classifier_args(inf)
+
     inf.add_argument("--save-images", action=argparse.BooleanOptionalAction, default=True)
     inf.add_argument(
         "--save-hits-only",
