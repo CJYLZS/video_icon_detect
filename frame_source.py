@@ -102,7 +102,8 @@ def _read_video_frame_at(
     idx: int,
     orientation_deg: float,
 ) -> np.ndarray | None:
-    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    if not cap.set(cv2.CAP_PROP_POS_FRAMES, idx):
+        return None
     ok, frame = cap.read()
     if not ok:
         return None

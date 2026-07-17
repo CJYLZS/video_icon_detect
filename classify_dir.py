@@ -80,6 +80,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--thresh", type=float, default=DEFAULT_CLS_THRESH, help="分类阈值（默认 0.7）")
     p.add_argument("-o", "--output-dir", type=Path, default=None, help="可选，保存 ROI 裁剪图")
     p.add_argument("--save-roi", action="store_true", help="同时保存二值化 ROI")
+    p.add_argument(
+        "--no-delete-misses",
+        action="store_true",
+        dest="no_delete",
+        default=False,
+        help="保留所有未命中文件（默认会删除）",
+    )
     args = p.parse_args(argv)
 
     if not args.image_dir.is_dir():
@@ -92,8 +99,17 @@ def main(argv: list[str] | None = None) -> None:
         save_roi=args.save_roi,
     )
 
-    hits = sum(1 for _, _, h in results)
-    print(f"\n总计: {len(results)} 张, 命中(击倒): {hits}, 未命中: {len(results) - hits}")
+    hits = sum(1 for _, _, h in results if h)
+    misses = len(results) - hits
+    print(f"\n总计: {len(results)} 张, 命中(击倒): {hits}, 未命中: {misses}")
+
+    if not args.no_delete and misses:
+        deleted = 0
+        for p, _, is_hit in results:
+            if not is_hit:
+                p.unlink()
+                deleted += 1
+        print(f"已删除 {deleted} 张未命中图片，保留 {hits} 张命中图片")
 
 
 if __name__ == "__main__":

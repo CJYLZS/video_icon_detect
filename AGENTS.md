@@ -55,6 +55,7 @@ python classify_dir.py data/test -o output/roi_results --save-roi
 | `--thresh` | 0.7 | Classification threshold |
 | `-o` / `--output-dir` | None | Save ROI crops to this directory |
 | `--save-roi` | False | Also save binarized ROI images |
+| `--delete-misses` / `--no-delete-misses` | True | Delete all non-knockdown images (default on) |
 
 ## Development
 

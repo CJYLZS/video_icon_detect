@@ -11,7 +11,7 @@ from pathlib import Path
 
 from paths import FFPROBE, VIDEO_INDEX_DIR
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -117,9 +117,9 @@ def build_pts_index(video_path: Path, *, probe_packets: int | None = None) -> Vi
     if not demux_pts:
         raise RuntimeError("ffprobe 未返回任何 packet 时间戳")
 
-    # demux 顺序下 pts 会因 B 帧乱序；按呈现时间排序并保留原始帧号（与 OpenCV 帧号一致）。
+    # demux 顺序下 pts 会因 B 帧乱序；按呈现时间排序，position 在排序列表中的位置 = OpenCV 帧号。
     pairs = sorted(enumerate(demux_pts), key=lambda x: x[1])
-    frame_indices = tuple(i for i, _ in pairs)
+    frame_indices = tuple(range(len(pairs)))
     pts_sec = tuple(t for _, t in pairs)
     return VideoPtsIndex(
         frame_indices=frame_indices,

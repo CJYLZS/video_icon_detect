@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import cv2
+
 from clip import ClipPlan, run_clip
 from classifier import train_classifier
 from extract import export_frames_from_icons, extract_frames
@@ -183,12 +185,6 @@ def cmd_clip_extract(args: argparse.Namespace) -> None:
 
     meta = json.loads(args.meta_json.read_text(encoding="utf-8"))
 
-    clip_video = args.meta_json.with_suffix(".mp4")
-    if not clip_video.is_file():
-        raise FileNotFoundError(
-            f"未找到对应视频: {clip_video}（JSON 同级目录下无同名 .mp4 文件）"
-        )
-
     seg = None
     for s in meta["segments"]:
         if s["segment"] == args.segment:
@@ -200,19 +196,42 @@ def cmd_clip_extract(args: argparse.Namespace) -> None:
             f"取值范围 1..{meta['total_segments']}）"
         )
 
+    src_span = seg["source"]
     out_span = seg["output"]
-    start_sec = out_span["start_sec"]
-    end_sec = out_span["end_sec"]
-    duration = out_span["duration_sec"]
+
+    source_video: Path | None = args.source_video
+    if source_video is None:
+        json_source = meta.get("source_video")
+        if json_source:
+            source_video = Path(json_source)
+    use_source = source_video is not None and source_video.is_file()
+
+    if use_source:
+        start_sec = float(src_span["start_sec"])
+        end_sec = float(src_span["end_sec"])
+        duration = float(src_span["duration_sec"])
+        video_path = source_video
+        label = "原视频"
+    else:
+        clip_video = args.meta_json.with_suffix(".mp4")
+        if not clip_video.is_file():
+            raise FileNotFoundError(
+                f"未找到对应视频: {clip_video}（JSON 同级目录下无同名 .mp4 文件）"
+            )
+        start_sec = float(out_span["start_sec"])
+        end_sec = float(out_span["end_sec"])
+        duration = float(out_span["duration_sec"])
+        video_path = clip_video
+        label = "clip"
 
     print(
         f"片段 #{args.segment} ({seg['type']}): "
-        f"clip {start_sec:.2f}s ~ {end_sec:.2f}s ({duration:.2f}s)"
+        f"{label} {start_sec:.2f}s ~ {end_sec:.2f}s ({duration:.2f}s)"
     )
 
     from video_index import load_or_build_index
 
-    index = load_or_build_index(clip_video)
+    index = load_or_build_index(video_path)
     total_frames = len(index.pts_sec)
 
     lo = index.locate_first_at_or_after(start_sec)
@@ -221,26 +240,65 @@ def cmd_clip_extract(args: argparse.Namespace) -> None:
         raise SystemExit("该片段在视频中无有效帧")
 
     interval = 1.0 / args.fps
-    indices: list[int] = []
+    seen: set[int] = set()
+    pairs: list[tuple[int, float]] = []
     t = start_sec
     while t <= end_sec + 1e-9:
-        idx = index.locate_first_at_or_after(t)
-        if idx > hi:
-            break
-        indices.append(idx)
+        idx = index.frame_for_pts(t)
+        if idx < lo or idx > hi:
+            t += interval
+            continue
+        if idx not in seen:
+            seen.add(idx)
+            pairs.append((idx, t))
         t += interval
 
-    if not indices:
+    if not pairs:
         raise SystemExit("采样后无帧可提取")
 
-    print(f"将提取 {len(indices)} 帧 (fps={args.fps}) -> {args.output_dir}")
+    print(f"将提取 {len(pairs)} 帧 (fps={args.fps}) -> {args.output_dir}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    from extract import extract_frames
+    import subprocess
+    import numpy as np
+    from paths import FFMPEG
 
-    saved = extract_frames(clip_video, args.output_dir, indices, prefix=args.prefix, ext=args.ext)
+    # probe video dimensions once
+    probe_cap = cv2.VideoCapture(str(video_path))
+    if not probe_cap.isOpened():
+        raise RuntimeError(f"无法打开视频: {video_path}")
+    w = int(probe_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(probe_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    probe_cap.release()
 
-    print(f"\n完成: {saved}/{len(indices)} 帧写入 {args.output_dir}")
+    saved = 0
+    for idx, t_sec in pairs:
+        t_ms = int(round(t_sec * 1000.0))
+        out_path = args.output_dir / f"{args.prefix}_{idx:05d}_t{t_ms:08d}ms.{args.ext}"
+
+        cmd = [
+            str(FFMPEG),
+            "-ss", f"{t_sec:.6f}",
+            "-i", str(video_path),
+            "-frames:v", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-vcodec", "rawvideo",
+            "-nostats", "-loglevel", "error",
+            "pipe:",
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        raw = proc.stdout.read(w * h * 3)
+        proc.wait()
+        if len(raw) != w * h * 3:
+            print(f"读取帧 {idx} 失败 (got {len(raw)} bytes, expected {w*h*3})")
+            continue
+        frame = np.frombuffer(raw, np.uint8).reshape((h, w, 3))
+        cv2.imwrite(str(out_path), frame)
+        print(f"帧 {idx} ({t_sec:.3f}s) -> {out_path.name}")
+        saved += 1
+
+    print(f"\n完成: {saved}/{len(pairs)} 帧写入 {args.output_dir}")
 
 
 def cmd_infer(args: argparse.Namespace) -> None:
@@ -586,9 +644,10 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.set_defaults(func=cmd_train)
 
-    ce = sub.add_parser("clip-extract", help="从 clip 视频中提取指定片段的帧到图片目录（用于补充训练样本）")
+    ce = sub.add_parser("clip-extract", help="从原视频（优先）或 clip 视频提取指定片段的帧（用于补充训练样本）")
     ce.add_argument("--meta-json", type=Path, required=True, metavar="JSON", help="clip 输出的片段清单 JSON")
     ce.add_argument("--segment", type=int, required=True, metavar="N", help="片段序号（1-based）")
+    ce.add_argument("--source-video", type=Path, default=None, metavar="VIDEO", help="原视频路径（默认从 JSON 读取 source_video；未提供则用 clip 视频）")
     ce.add_argument("--output-dir", type=Path, default=Path("data/negative"), help="输出目录（默认 data/negative/）")
     ce.add_argument("--fps", type=float, required=True, metavar="HZ", help="采样频率（每秒帧数）")
     ce.add_argument("--prefix", default="frame", help="输出文件名前缀（默认 frame）")

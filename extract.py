@@ -7,7 +7,7 @@ from pathlib import Path
 
 import cv2
 
-from frame_source import FrameSource, open_video, parse_frame_index_from_path
+from frame_source import FrameSource, parse_frame_index_from_path
 from paths import FFMPEG
 from video_index import load_or_build_index
 
@@ -20,15 +20,11 @@ def extract_frames(
     prefix: str = "frame",
     ext: str = "jpg",
 ) -> int:
-    _, total, _ = open_video(video_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
 
     with FrameSource(video_path, None) as src:
         for idx in indices:
-            if idx < 0 or idx >= total:
-                print(f"跳过帧 {idx}（有效范围 0..{total - 1}）")
-                continue
             frame = src.load(idx)
             if frame is None:
                 print(f"读取帧 {idx} 失败")
