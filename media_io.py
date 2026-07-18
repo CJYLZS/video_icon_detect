@@ -2,6 +2,7 @@
 
 from extract import extract_frames
 from frame_source import (
+    FFmpegSource,
     FrameSource,
     find_frame_image_path,
     load_bgr,
@@ -15,6 +16,7 @@ from sampling import collect_extract_indices, resolve_frame_indices, sample_step
 
 __all__ = [
     "DEFAULT_VIDEO",
+    "FFmpegSource",
     "FrameSource",
     "OUTPUT_DIR",
     "ROI_CHECK_DIR",

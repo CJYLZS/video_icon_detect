@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from frame_source import open_video
 from video_index import VideoPtsIndex, load_or_build_index
 
 
@@ -34,7 +33,9 @@ def resolve_frame_indices(
     video_path: Path,
 ) -> tuple[list[int], int, float]:
     """根据 CLI 参数解析帧号列表，并返回 (indices, total, fps)。"""
-    _, total, fps = open_video(video_path)
+    index = load_or_build_index(video_path)
+    total = len(index.pts_sec)
+    fps = total / index.duration_sec if index.duration_sec > 0 else 30.0
     indices = collect_extract_indices(args, video_path, total, fps)
     return indices, total, fps
 
@@ -42,7 +43,7 @@ def resolve_frame_indices(
 def _collect_indices_for_seconds(index: VideoPtsIndex, points: list[float], total: int) -> list[int]:
     out: set[int] = set()
     for sec in points:
-        idx = index.locate_first_at_or_after(max(0.0, sec))
+        idx = index.frame_for_pts(max(0.0, sec))
         if 0 <= idx < total:
             out.add(idx)
     return sorted(out)
@@ -66,14 +67,15 @@ def _collect_indices_for_range(
 
     interval = 1.0 / extract_fps
     t = start_sec
-    out: set[int] = set()
+    seen: set[int] = set()
     while t <= end_sec + 1e-9:
-        idx = index.locate_first_at_or_after(t)
-        if idx > hi:
-            break
-        out.add(idx)
+        idx = index.frame_for_pts(t)
+        if idx < lo or idx > hi:
+            t += interval
+            continue
+        seen.add(idx)
         t += interval
-    return sorted(out)
+    return sorted(seen)
 
 
 def collect_extract_indices(

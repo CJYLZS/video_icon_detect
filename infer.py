@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from classifier import classifier_prob, load_classifier
-from frame_source import FrameSource, resolve_media_source
+from frame_source import FFmpegSource, FrameSource, resolve_media_source
 from missile_detect import detect_missile_text
 from progress import print_progress
 from icon_roi import (
@@ -62,7 +62,7 @@ def _load_classifier_bundle(use_classifier: bool, *, cls_only: bool = False):
 
 def _iter_with_source(
     config: InferConfig,
-    src: FrameSource,
+    src: FrameSource | FFmpegSource,
 ) -> Iterator[FrameDetection | None]:
     if config.cls_only:
         tpl_bin = tpl_gray = tpl_mask = None
@@ -109,15 +109,21 @@ def _iter_with_source(
 def iter_detections(
     config: InferConfig,
     *,
-    frame_src: FrameSource | None = None,
+    frame_src: FrameSource | FFmpegSource | None = None,
 ) -> Iterator[FrameDetection | None]:
-    """逐帧检测；无法读取时 yield None。可传入已打开的 FrameSource。"""
+    """逐帧检测；无法读取时 yield None。可传入已打开的 FrameSource/FFmpegSource。"""
     if frame_src is not None:
         yield from _iter_with_source(config, frame_src)
         return
     det_video, det_image_dir = resolve_media_source(config.video, config.image_dir)
-    with FrameSource(det_video, det_image_dir) as src:
-        yield from _iter_with_source(config, src)
+    if det_video is not None:
+        from video_index import load_or_build_index as _vi_load
+        pts_index = _vi_load(det_video)
+        with FFmpegSource(det_video, pts_index) as src:
+            yield from _iter_with_source(config, src)
+    else:
+        with FrameSource(det_video, det_image_dir) as src:
+            yield from _iter_with_source(config, src)
 
 
 def run_infer(config: InferConfig) -> InferResult:

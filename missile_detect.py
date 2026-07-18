@@ -23,6 +23,7 @@ def _get_ocr():
     global _ocr_engine
     if _ocr_engine is None:
         from rapidocr import RapidOCR
+
         _ocr_engine = RapidOCR(
             params={
                 "Global.use_det": False,
@@ -34,6 +35,12 @@ def _get_ocr():
         for _h in _logger.handlers:
             _h.setLevel(logging.ERROR)
     return _ocr_engine
+
+
+def warmup_missile_ocr() -> None:
+    """预加载 RapidOCR 模型，避免首次调用时阻塞 FFmpeg pipe 导致死锁。"""
+    dummy = np.zeros((100, 100, 3), dtype=np.uint8)
+    _get_ocr()(dummy)
 
 
 def _crop_roi(frame: np.ndarray):

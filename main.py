@@ -10,7 +10,7 @@ import cv2
 from clip import ClipPlan, run_clip
 from classifier import train_classifier
 from extract import export_frames_from_icons, extract_frames
-from frame_source import FrameSource, load_bgr, resolve_media_source
+from frame_source import FFmpegSource, FrameSource, load_bgr, resolve_media_source
 from icon_roi import (
     DEFAULT_CLS_THRESH,
     DEFAULT_MATCH_THRESH,
@@ -259,44 +259,19 @@ def cmd_clip_extract(args: argparse.Namespace) -> None:
     print(f"将提取 {len(pairs)} 帧 (fps={args.fps}) -> {args.output_dir}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    import subprocess
-    import numpy as np
-    from paths import FFMPEG
-
-    # probe video dimensions once
-    probe_cap = cv2.VideoCapture(str(video_path))
-    if not probe_cap.isOpened():
-        raise RuntimeError(f"无法打开视频: {video_path}")
-    w = int(probe_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(probe_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    probe_cap.release()
-
+    pts_index = load_or_build_index(video_path)
     saved = 0
-    for idx, t_sec in pairs:
-        t_ms = int(round(t_sec * 1000.0))
-        out_path = args.output_dir / f"{args.prefix}_{idx:05d}_t{t_ms:08d}ms.{args.ext}"
-
-        cmd = [
-            str(FFMPEG),
-            "-ss", f"{t_sec:.6f}",
-            "-i", str(video_path),
-            "-frames:v", "1",
-            "-f", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-vcodec", "rawvideo",
-            "-nostats", "-loglevel", "error",
-            "pipe:",
-        ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        raw = proc.stdout.read(w * h * 3)
-        proc.wait()
-        if len(raw) != w * h * 3:
-            print(f"读取帧 {idx} 失败 (got {len(raw)} bytes, expected {w*h*3})")
-            continue
-        frame = np.frombuffer(raw, np.uint8).reshape((h, w, 3))
-        cv2.imwrite(str(out_path), frame)
-        print(f"帧 {idx} ({t_sec:.3f}s) -> {out_path.name}")
-        saved += 1
+    with FFmpegSource(video_path, pts_index) as src:
+        for idx, t_sec in pairs:
+            frame = src.load(idx)
+            if frame is None:
+                print(f"读取帧 {idx} 失败")
+                continue
+            t_ms = int(round(t_sec * 1000.0))
+            out_path = args.output_dir / f"{args.prefix}_{idx:05d}_t{t_ms:08d}ms.{args.ext}"
+            cv2.imwrite(str(out_path), frame)
+            print(f"帧 {idx} ({t_sec:.3f}s) -> {out_path.name}")
+            saved += 1
 
     print(f"\n完成: {saved}/{len(pairs)} 帧写入 {args.output_dir}")
 
@@ -331,7 +306,14 @@ def cmd_infer(args: argparse.Namespace) -> None:
     hits: list[FrameDetection] = []
 
     det_video, det_image_dir = resolve_media_source(args.video, args.image_dir)
-    with FrameSource(det_video, det_image_dir) as frame_src:
+    if det_video is not None:
+        det_video, det_image_dir = resolve_media_source(args.video, args.image_dir)
+        from video_index import load_or_build_index as _load_idx
+        pts_index = _load_idx(args.video)
+        frame_src: FFmpegSource | FrameSource = FFmpegSource(det_video, pts_index)
+    else:
+        frame_src = FrameSource(det_video, det_image_dir)
+    with frame_src:
         roi_printed = False
         for item in iter_detections(config, frame_src=frame_src):
             if item is None:
@@ -651,7 +633,7 @@ def build_parser() -> argparse.ArgumentParser:
     ce.add_argument("--output-dir", type=Path, default=Path("data/negative"), help="输出目录（默认 data/negative/）")
     ce.add_argument("--fps", type=float, required=True, metavar="HZ", help="采样频率（每秒帧数）")
     ce.add_argument("--prefix", default="frame", help="输出文件名前缀（默认 frame）")
-    ce.add_argument("--ext", default="jpg", choices=("jpg", "png"), help="输出图片格式（默认 jpg）")
+    ce.add_argument("--ext", default="png", choices=("jpg", "png"), help="输出图片格式（默认 png，无损，保留分类器精度）")
     ce.set_defaults(func=cmd_clip_extract)
 
     inf = sub.add_parser("infer", help="对视频按时间范围推理")

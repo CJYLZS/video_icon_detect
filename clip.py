@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from infer import InferConfig, collect_combined, collect_hit_frame_indices
+from missile_detect import detect_missile_text, warmup_missile_ocr
 from paths import FFMPEG
 from progress import print_progress, print_step
 from video_index import VideoPtsIndex, load_or_build_index
@@ -459,6 +460,7 @@ def run_clip(
     index = load_or_build_index(config.video)
 
     if enable_missile:
+        warmup_missile_ocr()
         hit_frames, missile_frames = collect_combined(
             config, enable_missile=True, show_progress=show_progress
         )

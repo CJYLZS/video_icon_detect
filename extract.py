@@ -7,7 +7,7 @@ from pathlib import Path
 
 import cv2
 
-from frame_source import FrameSource, parse_frame_index_from_path
+from frame_source import FFmpegSource, FrameSource, parse_frame_index_from_path
 from paths import FFMPEG
 from video_index import load_or_build_index
 
@@ -23,7 +23,8 @@ def extract_frames(
     output_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
 
-    with FrameSource(video_path, None) as src:
+    pts_index = load_or_build_index(video_path)
+    with FFmpegSource(video_path, pts_index) as src:
         for idx in indices:
             frame = src.load(idx)
             if frame is None:

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+from paths import FFMPEG
 
 
 def load_bgr(path: Path) -> np.ndarray:
@@ -172,7 +175,91 @@ class FrameSource:
         return float(self._cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
 
 
+class FFmpegSource:
+    """FFmpeg pipe 视频帧源（持续流式解码），和 clip-extract 统一使用 FFmpeg 解码。"""
+
+    def __init__(self, video_path: Path, pts_index = None) -> None:
+        self._video_path = video_path
+        self._pts_index = pts_index
+        self._proc: subprocess.Popen | None = None
+        self._w = 0
+        self._h = 0
+        self._frame_bytes = 0
+        self._next_idx = 0
+
+    def __enter__(self) -> FFmpegSource:
+        cap = cv2.VideoCapture(str(self._video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"无法打开视频: {self._video_path}")
+        self._w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self._h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+        self._frame_bytes = self._w * self._h * 3
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._proc:
+            try:
+                self._proc.stdout.close()
+            except Exception:
+                pass
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=3)
+            except Exception:
+                self._proc.kill()
+            self._proc = None
+
+    def load(self, idx: int) -> np.ndarray | None:
+        if self._proc is None:
+            start_sec = 0.0
+            if self._pts_index and 0 <= idx < len(self._pts_index.pts_sec):
+                start_sec = self._pts_index.pts_sec[idx]
+            self._start(start_sec)
+            self._next_idx = idx
+
+        if idx < self._next_idx:
+            return None
+
+        while self._next_idx < idx:
+            self._proc.stdout.read(self._frame_bytes)
+            self._next_idx += 1
+
+        raw = self._proc.stdout.read(self._frame_bytes)
+        if len(raw) != self._frame_bytes:
+            return None
+        self._next_idx = idx + 1
+        return np.frombuffer(raw, np.uint8).reshape((self._h, self._w, 3))
+
+    def position_msec(self) -> float:
+        if self._pts_index and self._next_idx > 0:
+            i = min(self._next_idx - 1, len(self._pts_index.pts_sec) - 1)
+            return self._pts_index.pts_sec[i] * 1000.0
+        return 0.0
+
+    def _start(self, start_sec: float) -> None:
+        self.close()
+        cmd = [
+            str(FFMPEG),
+            "-ss", f"{start_sec:.6f}",
+            "-i", str(self._video_path),
+            "-vsync", "0",
+            "-pix_fmt", "bgr24",
+            "-f", "rawvideo",
+            "-an",
+            "-nostats", "-loglevel", "error",
+            "pipe:",
+        ]
+        self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
 def load_frame(video_path: Path | None, image_dir: Path | None, idx: int) -> np.ndarray | None:
     """读单帧；批量读取请用 FrameSource。"""
+    if video_path is not None and image_dir is None:
+        with FFmpegSource(video_path) as src:
+            return src.load(idx)
     with FrameSource(video_path, image_dir) as src:
         return src.load(idx)
