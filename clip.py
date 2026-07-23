@@ -130,7 +130,7 @@ def merge_adjacent_kill_intervals(
     return merged
 
 
-TAIL_APPEND_SEC = 12.0
+TAIL_APPEND_SEC = 20.0
 
 
 def kill_intervals_to_clip_ranges(
@@ -347,7 +347,7 @@ def save_clip_manifest(
 
 
 def _extract_segment(
-    video: Path, out: Path, seg: TimeRange, *, use_cuda: bool = False
+    video: Path, out: Path, seg: TimeRange, *, source_fps: float, use_cuda: bool = False
 ) -> None:
     if not FFMPEG.is_file():
         raise FileNotFoundError(f"ffmpeg 不存在: {FFMPEG}")
@@ -360,6 +360,7 @@ def _extract_segment(
         cmd += ["-c:v", "h264_nvenc", "-preset", "p7", "-cq", "18"]
     else:
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+    cmd += ["-r", str(round(source_fps)), "-fps_mode", "cfr"]
     cmd += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -375,6 +376,7 @@ def export_highlight_video(
     segments_dir: Path | None = None,
     show_progress: bool = True,
     use_cuda: bool = False,
+    source_fps: float = 30.0,
 ) -> Path:
     """将多段剪辑区间拼接为单个输出视频。"""
     if not clips:
@@ -385,7 +387,7 @@ def export_highlight_video(
     if n == 1:
         if show_progress:
             print_progress(1, 1, label="导出", detail=_fmt_range(clips[0]))
-        _extract_segment(video, output_path, clips[0], use_cuda=use_cuda)
+        _extract_segment(video, output_path, clips[0], source_fps=source_fps, use_cuda=use_cuda)
         return output_path
 
     with tempfile.TemporaryDirectory(prefix="kill_clips_") as tmp:
@@ -400,7 +402,7 @@ def export_highlight_video(
                     detail=f"切片 {i + 1}/{n} {_fmt_range(seg)}",
                 )
             part = tmp_dir / f"part_{i:03d}.mp4"
-            _extract_segment(video, part, seg, use_cuda=use_cuda)
+            _extract_segment(video, part, seg, source_fps=source_fps, use_cuda=use_cuda)
             parts.append(part)
             if segments_dir is not None:
                 segments_dir.mkdir(parents=True, exist_ok=True)
@@ -530,5 +532,6 @@ def run_clip(
         segments_dir=segments_dir,
         show_progress=show_progress,
         use_cuda=use_cuda,
+        source_fps=config.fps,
     )
     return plan

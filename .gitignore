@@ -45,3 +45,6 @@ datasets/
 *.pth
 *.onnx
 *.weights
+
+# 捆绑工具（体积大，不入库）
+tools/
