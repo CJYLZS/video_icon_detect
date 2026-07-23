@@ -9,13 +9,12 @@ from typing import Iterator
 import cv2
 import numpy as np
 
-from classifier import classifier_prob, load_classifier
-from frame_source import FFmpegSource, FrameSource, resolve_media_source
-from missile_detect import detect_missile_text
-from progress import print_progress
-from icon_roi import (
-    DEFAULT_CLS_THRESH,
-    DEFAULT_MATCH_THRESH,
+from ..constants import DEFAULT_CLS_THRESH, DEFAULT_MATCH_THRESH
+from ..utils.progress import create_pbar, print_step
+from ..video.source import FFmpegSource, FrameSource, resolve_media_source
+from .classifier import classifier_prob, load_classifier
+from .missile import detect_missile_text
+from .roi import (
     crop_detect_roi,
     detect_frame,
     draw_detection,
@@ -111,13 +110,13 @@ def iter_detections(
     *,
     frame_src: FrameSource | FFmpegSource | None = None,
 ) -> Iterator[FrameDetection | None]:
-    """逐帧检测；无法读取时 yield None。可传入已打开的 FrameSource/FFmpegSource。"""
     if frame_src is not None:
         yield from _iter_with_source(config, frame_src)
         return
     det_video, det_image_dir = resolve_media_source(config.video, config.image_dir)
     if det_video is not None:
-        from video_index import load_or_build_index as _vi_load
+        from ..video.index import load_or_build_index as _vi_load
+
         pts_index = _vi_load(det_video)
         with FFmpegSource(det_video, pts_index) as src:
             yield from _iter_with_source(config, src)
@@ -142,14 +141,17 @@ def collect_hit_frame_indices(
     *,
     show_progress: bool = False,
 ) -> list[int]:
-    """检测命中帧号（升序），不保留图像。"""
     total = len(config.indices)
     hits: list[int] = []
+    pbar = create_pbar(total, desc="检测") if show_progress else None
     for n, item in enumerate(iter_detections(config), start=1):
         if item is not None and item.detection["present"]:
             hits.append(item.frame_index)
-        if show_progress:
-            print_progress(n, total, label="检测", detail=f"命中 {len(hits)}")
+        if pbar:
+            pbar.set_postfix(hits=len(hits))
+            pbar.update(1)
+    if pbar:
+        pbar.close()
     return hits
 
 
@@ -159,23 +161,27 @@ def collect_combined(
     enable_missile: bool = False,
     show_progress: bool = False,
 ) -> tuple[list[int], list[int]]:
-    """单次遍历：击倒优先，未命中时尝试导弹 OCR。
-    返回 (hit_frames, missile_frames)，均为帧号列表。"""
     total = len(config.indices)
     hits: list[int] = []
     missiles: list[int] = []
+    pbar = create_pbar(total, desc="检测") if show_progress else None
     for n, item in enumerate(iter_detections(config), start=1):
         if item is None:
+            if pbar:
+                pbar.update(1)
             continue
         if item.detection["present"]:
             hits.append(item.frame_index)
         elif enable_missile and detect_missile_text(item.frame):
             missiles.append(item.frame_index)
-        if show_progress:
+        if pbar:
             detail = f"击倒 {len(hits)}"
             if enable_missile:
                 detail += f" 导弹 {len(missiles)}"
-            print_progress(n, total, label="检测", detail=detail)
+            pbar.set_postfix_str(detail)
+            pbar.update(1)
+    if pbar:
+        pbar.close()
     return hits, missiles
 
 

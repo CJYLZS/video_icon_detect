@@ -7,14 +7,16 @@ import logging
 import cv2
 import numpy as np
 
-MISSILE_ROI_X1 = 0.40
-MISSILE_ROI_X2 = 0.60
-MISSILE_ROI_Y1 = 0.13
-MISSILE_ROI_Y2 = 0.20
-MISSILE_KEYWORD = "后自动引爆"
-MISSILE_PAD_BEFORE = 7.0
-MISSILE_PAD_AFTER = 4.0
-MIN_WHITE_PIXELS = 500
+from ..constants import (
+    MIN_WHITE_PIXELS,
+    MISSILE_KEYWORD,
+    MISSILE_PAD_AFTER,
+    MISSILE_PAD_BEFORE,
+    MISSILE_ROI_X1,
+    MISSILE_ROI_X2,
+    MISSILE_ROI_Y1,
+    MISSILE_ROI_Y2,
+)
 
 _ocr_engine = None
 
@@ -38,7 +40,6 @@ def _get_ocr():
 
 
 def warmup_missile_ocr() -> None:
-    """预加载 RapidOCR 模型，避免首次调用时阻塞 FFmpeg pipe 导致死锁。"""
     dummy = np.zeros((100, 100, 3), dtype=np.uint8)
     _get_ocr()(dummy)
 

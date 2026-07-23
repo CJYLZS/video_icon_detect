@@ -7,20 +7,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from frame_source import parse_frame_index_from_path
-from icon_roi import BIN_THRESH, binarize_roi, crop_detect_roi, load_template_meta
-from paths import TEMPLATE_DIR
-
-CLASSIFIER_PATH = TEMPLATE_DIR / "icon_classifier.pt"
-CLASSIFIER_INPUT_CHANNELS = 1
-# 缩放宽度；高度按 template/roi_size 宽高比推算（与模板 ~94×49 一致，非 1:1）
-CLASSIFIER_INPUT_BASE_W = 96
+from ..constants import BIN_THRESH, CLASSIFIER_INPUT_BASE_W, CLASSIFIER_INPUT_CHANNELS, CLASSIFIER_PATH, TEMPLATE_DIR
+from ..video.source import parse_frame_index_from_path
+from .roi import binarize_roi, crop_detect_roi, load_template_meta
 
 _input_wh: tuple[int, int] | None = None
 
 
 def classifier_input_size() -> tuple[int, int]:
-    """按 knockdown_meta.json 中 ROI 尺寸保持宽高比。"""
     meta = load_template_meta()
     roi_w, roi_h = int(meta["roi_size"][0]), int(meta["roi_size"][1])
     roi_w = max(1, roi_w)
@@ -40,7 +34,6 @@ def _set_input_wh(width: int, height: int) -> None:
 
 
 def _prepare_cls_tensor(roi_bgr: np.ndarray):
-    """与模板一致：ROI 二值化后按 ROI 宽高比缩放，单通道 [0,1]。"""
     import torch
 
     w, h = _resolve_input_wh()

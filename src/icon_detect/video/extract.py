@@ -7,9 +7,9 @@ from pathlib import Path
 
 import cv2
 
-from frame_source import FFmpegSource, FrameSource, parse_frame_index_from_path
-from paths import FFMPEG
-from video_index import load_or_build_index
+from ..constants import FFMPEG
+from .index import load_or_build_index
+from .source import FFmpegSource, FrameSource, parse_frame_index_from_path
 
 
 def extract_frames(
@@ -42,7 +42,6 @@ def extract_frames(
 
 
 def extract_frame_at_sec(video_path: Path, t_sec: float, out_path: Path) -> None:
-    """按呈现时间（秒）用 ffmpeg 导出单帧，与 icon 检测时 PTS 对齐。"""
     if not FFMPEG.is_file():
         raise FileNotFoundError(f"ffmpeg 不存在: {FFMPEG}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,11 +76,6 @@ def export_frames_from_icons(
     ext: str = "jpg",
     remove_stale: bool = True,
 ) -> int:
-    """
-    以 *_icon.jpg 为清单，按各帧 PTS 从视频导出与推理一致的原始帧。
-
-    文件名保留 icon 中的帧号，时间戳用 ffprobe PTS（非 OpenCV 帧号 seek）。
-    """
     if not icon_dir.is_dir():
         raise FileNotFoundError(f"目录不存在: {icon_dir}")
     if not video_path.is_file():

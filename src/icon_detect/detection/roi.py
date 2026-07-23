@@ -8,20 +8,20 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from paths import TEMPLATE_DIR
-
-DEFAULT_TEMPLATE_BIN = TEMPLATE_DIR / "knockdown_bin.png"
-DEFAULT_TEMPLATE_GRAY = TEMPLATE_DIR / "knockdown_gray.png"
-DEFAULT_TEMPLATE_COLOR = TEMPLATE_DIR / "knockdown_color.jpg"
-DEFAULT_TEMPLATE_META = TEMPLATE_DIR / "knockdown_meta.json"
-
-DETECT_ROI_CX = 0.50
-DETECT_ROI_CY = 0.555
-DETECT_ROI_W = 0.04
-DETECT_ROI_H = 0.03
-BIN_THRESH = 205
-DEFAULT_MATCH_THRESH = 0.75
-DEFAULT_CLS_THRESH = 0.8
+from ..constants import (
+    BIN_THRESH,
+    DEFAULT_CLS_THRESH,
+    DEFAULT_MATCH_THRESH,
+    DEFAULT_TEMPLATE_BIN,
+    DEFAULT_TEMPLATE_COLOR,
+    DEFAULT_TEMPLATE_GRAY,
+    DEFAULT_TEMPLATE_META,
+    DETECT_ROI_CX,
+    DETECT_ROI_CY,
+    DETECT_ROI_H,
+    DETECT_ROI_W,
+    TEMPLATE_DIR,
+)
 
 
 def detect_roi_rect(frame_shape: tuple[int, ...]) -> tuple[int, int, int, int]:

@@ -1,50 +1,107 @@
 # 和平精英击倒图标检测
 
-固定 UI 槽位 ROI + 二值 template（前景一致率 + 灰度 ZNCC），可选轻量 CNN 分类器。
+固定 UI 槽位 ROI + 二值 template（前景一致率 + 灰度 ZNCC），可选轻量 CNN 分类器。默认使用分类器模式。
 
 ## 环境
 
+使用 `uv` 管理虚拟环境和依赖：
+
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\pip install -r requirements.txt
+uv venv .venv --python 3.11
+uv pip install -r requirements.txt
 ```
 
-使用 `.\.venv\Scripts\python.exe`，勿直接用系统 `python`。
+Windows-only，路径用 `\`。工具包装了 `tools/ffmpeg-8.1.1-essentials_build/bin/ffmpeg.exe`，不依赖系统 ffmpeg。
 
-## 统一入口 `main.py`
+## 项目结构
+
+```
+video_icon_detect/
+├── main.py                          # 薄 CLI 入口
+├── src/icon_detect/
+│   ├── constants.py                 # 全部路径/算法常量
+│   ├── detection/                   # 检测核心
+│   │   ├── roi.py                   # ROI 裁剪、二值化、模板匹配
+│   │   ├── classifier.py            # CNN 二分类器
+│   │   ├── infer.py                 # 检测流水线
+│   │   └── missile.py               # 巡航导弹 OCR
+│   ├── video/                       # 视频 I/O
+│   │   ├── source.py                # FFmpegSource / FrameSource
+│   │   ├── index.py                 # ffprobe PTS 索引
+│   │   ├── sampling.py              # 帧采样计划
+│   │   └── extract.py               # 帧导出
+│   ├── montage/                     # 集锦
+│   │   ├── planner.py               # 区间规划
+│   │   └── exporter.py              # ffmpeg 导出
+│   ├── cli/                         # CLI 层
+│   │   ├── parser.py                # argparse 定义
+│   │   └── handlers.py              # 命令处理函数
+│   └── utils/
+│       ├── progress.py
+│       └── preview.py
+├── tools/                           # 独立工具脚本
+│   ├── classify_dir.py
+│   ├── profile_infer.py
+│   └── visualize_thresholds.py
+├── tests/                           # pytest
+│   ├── conftest.py
+│   └── test_cli_modes.py
+└── template/                        # 模板与模型
+    ├── knockdown_bin.png / knockdown_gray.png / knockdown_color.jpg
+    ├── knockdown_meta.json
+    └── icon_classifier.pt           # 训练后的 CNN 权重 (gitignored)
+```
+
+## 三种检测模式
+
+| 模式 | 触发方式 | 判定逻辑 |
+|---|---|---|
+| **仅分类器 (默认)** | 无特殊标志 | CNN prob ≥ `--cls-thresh` (默认 0.8) |
+| **模板 + 分类器** | `--use-classifier` | 模板匹配通过 **且** CNN prob ≥ `--cls-thresh` |
+| **仅模板** | `--template-only` | 二值相似度 + ZNCC ≥ `--match-thresh` (默认 0.75) |
+
+## 统一入口
+
+```powershell
+.venv\Scripts\python.exe main.py <subcommand>
+```
 
 | 子命令 | 功能 |
-|--------|------|
+|---|---|
 | `extract` | 从视频按帧号/时间/范围导出图片 |
-| `template` | 从**单张整帧图片**生成二值模板 |
-| `train` | 在帧目录上训练可选分类器 |
+| `export-icons` | 按 `*_icon.jpg` 清单从视频重新导出原始帧 |
+| `template` | 从单张整帧图片生成二值模板 |
+| `train` | 训练 CNN 分类器 (可选但推荐) |
 | `infer` | 对视频或帧目录推理 |
+| `clip` | 检测击杀并生成集锦 montage |
+| `clip-batch` | 批量剪辑多个视频 |
+| `clip-extract` | 从集锦 manifest 中提取特定片段的帧 (用于补充训练样本) |
 
-### 1. 抽帧
-
-```powershell
-.\.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames_38_45 --start-sec 38 --end-sec 45
-
-# 按频率抽帧：每秒 1 张（30fps 视频约每隔 30 帧取 1 张）
-.\.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames --fps 1
-
-# 指定时间段 + 抽帧频率
-.\.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames --start-sec 10 --end-sec 60 --fps 2
-```
-
-`extract` 在时间过滤上使用真实帧时间戳（PTS），可正确处理可变帧率（VFR）视频。
-
-### 2. 构造模板（指定一张含图标的截图）
+### 1. 构造模板
 
 ```powershell
-.\.venv\Scripts\python.exe main.py template --image frames_140_160\frame_00153.jpg
+.venv\Scripts\python.exe main.py template --image frames_140_160\frame_00153.jpg
 ```
 
 产物在 `template/`；ROI 检查图在 `output/roi_check/`。
 
-### 3. 训练分类器（可选）
+### 2. 抽帧
 
-`frames/` 目录结构：
+```powershell
+.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames_38_45 --start-sec 38 --end-sec 45
+
+# 按频率抽帧：每秒 1 张
+.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames --fps 1
+
+# 指定时间段 + 频率
+.venv\Scripts\python.exe main.py extract --video test.mp4 --output-dir frames --start-sec 10 --end-sec 60 --fps 2
+```
+
+`extract` 使用真实帧时间戳 (PTS)，可正确处理 VFR 视频。
+
+### 3. 训练分类器 (推荐)
+
+目录结构：
 
 ```text
 frames/
@@ -53,76 +110,88 @@ frames/
 ```
 
 ```powershell
-# 推荐：按目录训练（正/负已分好；输入为 ROI 二值图，与模板一致）
-.\.venv\Scripts\python.exe main.py train --positive-dir frames\positive --negative-dir frames\negative --epochs 80
+# 推荐：按目录训练
+.venv\Scripts\python.exe main.py train --positive-dir frames\positive --negative-dir frames\negative --epochs 80
 
-# 混合目录 + 帧号打标签（旧方式）
-.\.venv\Scripts\python.exe main.py train --image-dir frames_140_160 --positive-from 153
+# 混合目录 + 帧号打标签
+.venv\Scripts\python.exe main.py train --image-dir frames_140_160 --positive-from 153
 
-# 混合目录 + 额外负样本目录
-.\.venv\Scripts\python.exe main.py train --image-dir frames_mix --positive 2665 2671 --negative-dir frames\negative
+# 混合目录 + 额外负样本
+.venv\Scripts\python.exe main.py train --image-dir frames_mix --positive 2665 2671 --negative-dir frames\negative
 ```
 
 ### 4. 推理
 
 ```powershell
-.\.venv\Scripts\python.exe main.py infer --image-dir frames_140_160 --output-dir output\icon_detect
+# 对帧目录 (默认仅分类器)
+.venv\Scripts\python.exe main.py infer --image-dir frames_140_160 --output-dir output\icon_detect
+
+# 对视频
+.venv\Scripts\python.exe main.py infer --video test.mp4 --start-sec 140 --end-sec 160
+
+# 切换到模板+分类器模式
+.venv\Scripts\python.exe main.py infer --video test.mp4 --fps 10 --use-classifier
+
+# 仅模板模式
+.venv\Scripts\python.exe main.py infer --video test.mp4 --fps 10 --template-only
 ```
 
-对视频：
+### 5. 击杀集锦剪辑
+
+在指定时间窗内按 `--fps` 采样检测击倒图标（省略 `--start-sec`/`--end-sec` 则处理整片），自动合并击杀区间并导出集锦：
 
 ```powershell
-.\.venv\Scripts\python.exe main.py infer --video test.mp4 --start-frame 140 --end-frame 160
-```
+# 默认仅分类器模式
+.venv\Scripts\python.exe main.py clip --video test.mp4 --fps 10 -o output/clips/highlight.mp4
 
-启用分类器（需先 `train`）：
-
-```powershell
-# 模板 + 分类器（两者都通过才命中）
-.\.venv\Scripts\python.exe main.py infer --video test.mp4 --fps 10 --use-classifier
-
-# 仅分类器（只看 cls 概率，忽略模板阈值）
-.\.venv\Scripts\python.exe main.py infer --video test.mp4 --fps 10 --cls-only
-```
-
-`clip` 同样支持 `--use-classifier` 与 `--cls-only`。
-
-### 击杀集锦剪辑 `clip`
-
-在指定时间窗内按 `--fps` 采样检测击倒图标（省略 `--start-sec` / `--end-sec` 则处理整片视频），自动合并击杀区间并导出集锦：
-
-```powershell
-.\.venv\Scripts\python.exe main.py clip --video test.mp4 --fps 10 --use-classifier -o output/clips/highlight.mp4
-.\.venv\Scripts\python.exe main.py clip --video test.mp4 --start-sec 70 --end-sec 80 --fps 10 --use-classifier `
+# 限定时间范围 + 元数据导出
+.venv\Scripts\python.exe main.py clip --video test.mp4 --start-sec 70 --end-sec 80 --fps 10 `
   --meta-json output/clips/ranges.json
+
+# 模板+分类器模式
+.venv\Scripts\python.exe main.py clip --video test.mp4 --fps 10 --use-classifier -o output/clips/highlight.mp4
+
+# 启用巡航导弹检测
+.venv\Scripts\python.exe main.py clip --video test.mp4 --fps 10 --missile -o output/clips/highlight.mp4
 ```
 
-规则：每段击杀取「开始−pad_before ~ 结束+pad_after」；相邻击杀间隔 &lt; 2s 则合并；集锦末尾会再拼接原视频最后 12 秒。
+规则：每段击杀取 `开始-pad_before ~ 结束+pad_after`；相邻击杀间隔 < `--merge-gap` 则合并；集锦末尾追加原视频最后 20 秒。
 
-## 模块
+#### 批量剪辑
 
-| 文件 | 说明 |
-|------|------|
-| `main.py` | CLI 入口 |
-| `infer.py` | 检测流水线（读帧 + 模板/分类器） |
-| `clip.py` | 击杀区间合并与 ffmpeg 集锦导出 |
-| `frame_source.py` | `FrameSource`、视频/图片读帧 |
-| `sampling.py` | 按时间范围规划帧索引 |
-| `extract.py` | 视频抽帧导出 |
-| `icon_roi.py` | ROI、二值化、template 匹配 |
-| `video_index.py` | ffprobe PTS 索引 |
-| `classifier.py` | 可选 CNN（ROI 二值化；输入宽高比与 `template/roi_size` 一致，默认约 96×50） |
-| `preview.py` | 模板 ROI 预览图 |
-| `paths.py` | 根目录、ffmpeg/ffprobe、输出目录等路径常量 |
-| `media_io.py` | 兼容 re-export（旧 import 仍可用） |
+```powershell
+.venv\Scripts\python.exe main.py clip-batch --input-dir input_videos --output-dir output/clips --fps 10
+```
 
-`extract_frames.py` / `detect_icon.py` 仅为旧命令兼容，新用法请用 `main.py`。
+输出文件名与输入视频同名。
+
+### 6. 其他工具
+
+| 脚本 | 用途 |
+|---|---|
+| `tools/classify_dir.py` | 对目录下所有图片执行 cls-only 分类，可保存 ROI / 删除负样本 |
+| `tools/profile_infer.py` | infer 流水线分段计时 |
+| `tools/visualize_thresholds.py` | 多阈值二值化横向拼接对比 |
+
+```powershell
+.venv\Scripts\python.exe tools/classify_dir.py data/test --thresh 0.9 -o output/roi_results --save-roi
+.venv\Scripts\python.exe tools/profile_infer.py 75 80 10
+```
 
 ## ROI 参数
 
-在 `icon_roi.py` 顶部 `DETECT_ROI_*` 按分辨率比例定义；换布局后重调并重新 `template`。
+在 `src/icon_detect/constants.py` 顶部 `DETECT_ROI_*` 按分辨率比例定义；换布局后重调并重新 `template`。
+
+## 测试
+
+```powershell
+uv pip install pytest
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
 
 ## 目录
 
-- `template/` — 模板与 `knockdown_meta.json`
-- `output/` — 检测结果（git 忽略）
+- `template/` — 模板与分类器权重 (`.pt` 文件 gitignored)
+- `output/` — 检测结果、集锦、视频索引缓存 (gitignored)
+- `tools/` — 独立工具脚本
+- `tests/` — pytest 测试

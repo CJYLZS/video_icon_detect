@@ -9,15 +9,13 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from paths import FFPROBE, VIDEO_INDEX_DIR
+from ..constants import FFPROBE, VIDEO_INDEX_DIR
 
 INDEX_VERSION = 2
 
 
 @dataclass(frozen=True)
 class VideoPtsIndex:
-    """按呈现时间排序的 (帧号, pts_sec) 列表，用于二分查找。"""
-
     frame_indices: tuple[int, ...]
     pts_sec: tuple[float, ...]
     duration_sec: float
@@ -39,7 +37,6 @@ class VideoPtsIndex:
         return self.pts_sec[-1] if self.pts_sec else 0.0
 
     def pts_for_frame(self, frame_idx: int) -> float:
-        """返回指定帧号对应的呈现时间（秒）。"""
         if not self.pts_sec:
             return 0.0
         i = bisect.bisect_left(self.frame_indices, frame_idx)
@@ -50,7 +47,6 @@ class VideoPtsIndex:
         return self.pts_sec[0]
 
     def frame_for_pts(self, pts_sec: float) -> int:
-        """返回距离指定 PTS 时间最近的帧号（0-based，与 OpenCV 一致）。"""
         if not self.frame_indices:
             return 0
         i = bisect.bisect_left(self.pts_sec, pts_sec)
@@ -83,11 +79,6 @@ def _parse_pts_lines(text: str) -> list[float]:
 
 
 def build_pts_index(video_path: Path, *, probe_packets: int | None = None) -> VideoPtsIndex:
-    """
-    用 ffprobe 读取 packet 的 pts_time（demux，不解码像素）。
-
-    probe_packets: 仅用于调试输出格式时限制包数量；None 表示全片。
-    """
     if not FFPROBE.is_file():
         raise FileNotFoundError(f"ffprobe 不存在: {FFPROBE}")
     if not video_path.is_file():
@@ -117,7 +108,6 @@ def build_pts_index(video_path: Path, *, probe_packets: int | None = None) -> Vi
     if not demux_pts:
         raise RuntimeError("ffprobe 未返回任何 packet 时间戳")
 
-    # demux 顺序下 pts 会因 B 帧乱序；按呈现时间排序，position 在排序列表中的位置 = OpenCV 帧号。
     pairs = sorted(enumerate(demux_pts), key=lambda x: x[1])
     frame_indices = tuple(range(len(pairs)))
     pts_sec = tuple(t for _, t in pairs)

@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from paths import FFMPEG
+from ..constants import FFMPEG
 
 
 def load_bgr(path: Path) -> np.ndarray:
@@ -66,7 +66,6 @@ def _resolve_orientation_for_manual_apply(cap: cv2.VideoCapture) -> float:
 
 
 def find_frame_image_path(image_dir: Path, idx: int) -> Path | None:
-    """按帧号查找图片，兼容 frame_00123.jpg 与 frame_00123_t00012345ms.jpg。"""
     for ext in (".jpg", ".png"):
         plain = image_dir / f"frame_{idx:05d}{ext}"
         if plain.is_file():
@@ -114,8 +113,6 @@ def _read_video_frame_at(
 
 
 class FrameSource:
-    """按帧号读图/读视频；视频下复用 VideoCapture，升序帧号优先顺序解码。"""
-
     def __init__(self, video_path: Path | None, image_dir: Path | None) -> None:
         self._video_path = video_path
         self._image_dir = image_dir
@@ -176,8 +173,6 @@ class FrameSource:
 
 
 class FFmpegSource:
-    """FFmpeg pipe 视频帧源（持续流式解码），和 clip-extract 统一使用 FFmpeg 解码。"""
-
     def __init__(self, video_path: Path, pts_index = None) -> None:
         self._video_path = video_path
         self._pts_index = pts_index
@@ -257,7 +252,6 @@ class FFmpegSource:
 
 
 def load_frame(video_path: Path | None, image_dir: Path | None, idx: int) -> np.ndarray | None:
-    """读单帧；批量读取请用 FrameSource。"""
     if video_path is not None and image_dir is None:
         with FFmpegSource(video_path) as src:
             return src.load(idx)

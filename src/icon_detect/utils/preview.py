@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from icon_roi import binarize_roi, crop_detect_roi, detect_roi_rect
+from ..detection.roi import binarize_roi, crop_detect_roi, detect_roi_rect
 
 
 def export_roi_preview(
