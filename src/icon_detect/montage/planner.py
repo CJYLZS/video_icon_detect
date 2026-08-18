@@ -152,6 +152,19 @@ def normalize_clip_to_fixed_duration(
         return None
 
     target_sec = target_frames / output_fps
+
+    # 主路径：前垫固定不动，只调整后垫 → 击杀瞬间在段落内的偏移量恒定。
+    # 长度精确 = target_frames，代价是后垫长度可变（0.3~0.8s 等）。
+    start = max(0.0, kill.start_sec - pad_before)
+    tail_sec = start + target_sec - kill.end_sec
+    if tail_sec >= 0.0:
+        end = min(video_duration, start + target_sec)
+        if end > start:
+            return TimeRange(start, end)
+        return None
+
+    # 回退路径：击杀过长导致后垫为负（无法在不截断击杀的前提下凑满前垫+目标长度），
+    # 退回两侧调整（偏长削前垫 / 偏短补后垫），保证击杀画面完整，代价是偏移量不再恒定。
     natural_frames = natural_dur * output_fps
     excess_frames = natural_frames - target_frames
 

@@ -96,7 +96,7 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         metavar="N",
-        help="固定每段剪辑帧数（如 168=2.8s@60fps），未设置则不启用",
+        help="固定每段剪辑帧数（如 168=2.8s@60fps）；前垫固定不变、只调整后垫，击杀偏移量恒定；未设置则不启用",
     )
     parser.add_argument(
         "--fixed-duration-min",
