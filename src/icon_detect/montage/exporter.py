@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from ..constants import FFMPEG
+from ..constants import FIXED_DURATION_ACCEPT_MAX, FIXED_DURATION_ACCEPT_MIN, FFMPEG
 from ..detection.infer import InferConfig, collect_combined, collect_hit_frame_indices
 from ..detection.missile import warmup_missile_ocr
 from ..utils.progress import print_step
@@ -132,6 +132,10 @@ def run_clip(
     missile_pad_after: float = 5.0,
     missile_prefix: bool = True,
     use_cuda: bool = False,
+    output_fps: float = 60,
+    fixed_duration_frames: int | None = None,
+    fixed_duration_accept_min: float = FIXED_DURATION_ACCEPT_MIN,
+    fixed_duration_accept_max: float = FIXED_DURATION_ACCEPT_MAX,
 ) -> ClipPlan:
     if show_progress:
         mode_tag = "检测" if not enable_missile else "击倒 + 导弹检测"
@@ -162,6 +166,10 @@ def run_clip(
         missile_pad_before=missile_pad_before,
         missile_pad_after=missile_pad_after,
         missile_prefix=missile_prefix,
+        fixed_duration_frames=fixed_duration_frames,
+        fixed_duration_fps=output_fps,
+        fixed_duration_accept_min=fixed_duration_accept_min,
+        fixed_duration_accept_max=fixed_duration_accept_max,
     )
 
     if show_progress:
@@ -169,6 +177,13 @@ def run_clip(
         print(f"      {plan.summary_line()}")
         if plan.kill_merged_count:
             print(f"      （相邻图标时段按 {merge_gap}s 合并了 {plan.kill_merged_count} 段）")
+        if fixed_duration_frames:
+            print(
+                f"      （固定时长模式：目标 {fixed_duration_frames} 帧 "
+                f"({fixed_duration_frames / output_fps:.1f}s@{output_fps:.0f}fps)，"
+                f"已归一 {plan.fixed_duration_normalized} 段，"
+                f"接受范围 [{fixed_duration_accept_min:.1f}s, {fixed_duration_accept_max:.1f}s]）"
+            )
         if plan.missile_event_count:
             print(f"      （导弹区间前 {missile_pad_before}s 后 {missile_pad_after}s）")
         if missile_prefix and plan.missile_event_count:
@@ -191,7 +206,7 @@ def run_clip(
         manifest_path,
         plan.clips,
         index,
-        source_fps=config.fps,
+        source_fps=output_fps,
         source_video=config.video,
     )
     if show_progress:
@@ -199,7 +214,8 @@ def run_clip(
 
     if show_progress:
         total_dur = sum(c.duration_sec for c in plan.clips)
-        print_step(3, 3, f"ffmpeg 导出 {plan.clip_count} 段（总时长约 {total_dur:.1f}s）...")
+        fps_note = f"@{output_fps:.0f}fps" if output_fps != config.fps else ""
+        print_step(3, 3, f"ffmpeg 导出 {plan.clip_count} 段（总时长约 {total_dur:.1f}s{fps_note}）...")
 
     export_highlight_video(
         config.video,
@@ -208,6 +224,6 @@ def run_clip(
         segments_dir=segments_dir,
         show_progress=show_progress,
         use_cuda=use_cuda,
-        source_fps=config.fps,
+        source_fps=output_fps,
     )
     return plan

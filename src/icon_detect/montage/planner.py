@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ..constants import TAIL_APPEND_SEC
+from ..constants import FIXED_DURATION_ACCEPT_MAX, FIXED_DURATION_ACCEPT_MIN, TAIL_APPEND_SEC
 from ..video.index import VideoPtsIndex
 
 
@@ -35,6 +35,7 @@ class ClipPlan:
     missile_frames: list[int] | None = None
     missile_kills_before: list[TimeRange] | None = None
     missile_kills: list[TimeRange] | None = None
+    fixed_duration_normalized: int = 0
 
     @property
     def hit_count(self) -> int:
@@ -135,6 +136,40 @@ def kill_intervals_to_clip_ranges(
     return clips
 
 
+def normalize_clip_to_fixed_duration(
+    kill: TimeRange,
+    video_duration: float,
+    target_frames: int,
+    output_fps: float,
+    *,
+    pad_before: float = 2.0,
+    pad_after: float = 0.5,
+    accept_min_sec: float = FIXED_DURATION_ACCEPT_MIN,
+    accept_max_sec: float = FIXED_DURATION_ACCEPT_MAX,
+) -> TimeRange | None:
+    natural_dur = kill.duration_sec + pad_before + pad_after
+    if natural_dur < accept_min_sec or natural_dur > accept_max_sec:
+        return None
+
+    target_sec = target_frames / output_fps
+    natural_frames = natural_dur * output_fps
+    excess_frames = natural_frames - target_frames
+
+    adj_before = pad_before
+    adj_after = pad_after
+
+    if excess_frames > 0:
+        adj_before = max(0.0, pad_before - excess_frames / output_fps)
+    else:
+        adj_after = pad_after + abs(excess_frames) / output_fps
+
+    start = max(0.0, kill.start_sec - adj_before)
+    end = min(video_duration, kill.end_sec + adj_after)
+    if end <= start:
+        return None
+    return TimeRange(start, end)
+
+
 def append_video_tail(
     clips: list[LabeledTimeRange],
     video_duration: float,
@@ -181,19 +216,40 @@ def build_clip_plan(
     missile_pad_before: float = 5.0,
     missile_pad_after: float = 5.0,
     missile_prefix: bool = True,
+    fixed_duration_frames: int | None = None,
+    fixed_duration_fps: float = 10.0,
+    fixed_duration_accept_min: float = FIXED_DURATION_ACCEPT_MIN,
+    fixed_duration_accept_max: float = FIXED_DURATION_ACCEPT_MAX,
 ) -> ClipPlan:
     hit_times = [index.pts_for_frame(f) for f in sorted(hit_frames)]
     kills_before = group_hits_to_kill_intervals(hit_times, max_hit_gap=max_hit_gap)
     kills = merge_adjacent_kill_intervals(kills_before, gap_sec=merge_gap)
-    kd_clips = [
-        LabeledTimeRange(start_sec=c.start_sec, end_sec=c.end_sec, type="knockdown")
-        for c in kill_intervals_to_clip_ranges(
-            kills,
-            video_duration=index.duration_sec,
-            pad_before=pad_before,
-            pad_after=pad_after,
-        )
-    ]
+
+    use_fixed = fixed_duration_frames is not None and fixed_duration_frames > 0
+    kd_clips: list[LabeledTimeRange] = []
+    normalized = 0
+    for kill in kills:
+        if use_fixed:
+            adjusted = normalize_clip_to_fixed_duration(
+                kill,
+                video_duration=index.duration_sec,
+                target_frames=fixed_duration_frames,
+                output_fps=fixed_duration_fps,
+                pad_before=pad_before,
+                pad_after=pad_after,
+                accept_min_sec=fixed_duration_accept_min,
+                accept_max_sec=fixed_duration_accept_max,
+            )
+            if adjusted is not None:
+                kd_clips.append(
+                    LabeledTimeRange(start_sec=adjusted.start_sec, end_sec=adjusted.end_sec, type="knockdown")
+                )
+                normalized += 1
+                continue
+        start = max(0.0, kill.start_sec - pad_before)
+        end = min(index.duration_sec, kill.end_sec + pad_after)
+        if end > start:
+            kd_clips.append(LabeledTimeRange(start_sec=start, end_sec=end, type="knockdown"))
 
     m_kills_before: list[TimeRange] = []
     m_kills: list[TimeRange] = []
@@ -228,6 +284,7 @@ def build_clip_plan(
         missile_frames=sorted(missile_frames) if missile_frames else None,
         missile_kills_before=m_kills_before if missile_frames else None,
         missile_kills=m_kills if missile_frames else None,
+        fixed_duration_normalized=normalized,
     )
 
 
@@ -247,6 +304,7 @@ def save_ranges_json(path: Path, plan: ClipPlan, *, merge_gap: float) -> None:
             "highlight_clips": plan.clip_count,
             "merged_by_merge_gap": plan.kill_merged_count,
             "merged_by_overlap": plan.clip_merged_count,
+            "fixed_duration_normalized": plan.fixed_duration_normalized,
             "merge_gap_sec": merge_gap,
             "note": "icon_events 为 UI 图标连续时段，间隔<merge_gap 的相邻段会合并，不等于真实击倒次数",
             "knockdown_events": plan.icon_event_count,

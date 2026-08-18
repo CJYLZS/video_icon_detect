@@ -380,6 +380,8 @@ def _process_clip_video(
         print("GPU 加速: 已启用 (CUDA)")
     print(f"视频: {video.name}, 总帧数: {total}, 原始 fps: {fps:.2f}")
     print(f"剪辑范围: {start_sec:.2f}s ~ {end_sec:.2f}s, 采样 {args.fps}/s (步长 {step})")
+    if args.output_fps != args.fps:
+        print(f"输出帧率: {args.output_fps:.0f}fps (检测采样 {args.fps:.0f}fps)")
     config = _infer_config_from_args(clip_args, indices, fps)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -398,11 +400,17 @@ def _process_clip_video(
         missile_pad_after=args.missile_pad_after,
         missile_prefix=not args.no_missile_prefix,
         use_cuda=use_gpu,
+        output_fps=args.output_fps,
+        fixed_duration_frames=args.fixed_duration_frames,
+        fixed_duration_accept_min=args.fixed_duration_min,
+        fixed_duration_accept_max=args.fixed_duration_max,
     )
 
 
 def _print_clip_result(plan: ClipPlan, output: Path, meta_path: Path | None) -> None:
     print(f"\n{plan.summary_line()}")
+    if plan.fixed_duration_normalized:
+        print(f"(固定时长: 已归一 {plan.fixed_duration_normalized} 段)")
     print(f"\n集锦片段 {plan.clip_count} 段:")
     for i, c in enumerate(plan.clips, 1):
         print(f"  #{i} {c.start_sec:.2f}s ~ {c.end_sec:.2f}s ({c.duration_sec:.2f}s)")

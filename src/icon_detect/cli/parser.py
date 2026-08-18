@@ -5,7 +5,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from icon_detect.constants import CLIPS_DIR, DEFAULT_CLS_THRESH, DEFAULT_MATCH_THRESH, OUTPUT_DIR, ROI_CHECK_DIR
+from icon_detect.constants import (
+    CLIPS_DIR,
+    DEFAULT_CLS_THRESH,
+    DEFAULT_MATCH_THRESH,
+    FIXED_DURATION_ACCEPT_MAX,
+    FIXED_DURATION_ACCEPT_MIN,
+    OUTPUT_DIR,
+    ROI_CHECK_DIR,
+)
 
 
 def _add_time_range_group(parser: argparse.ArgumentParser) -> None:
@@ -53,6 +61,13 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
     _add_fps_arg(parser, required=True)
     _add_detect_args(parser)
     parser.add_argument("--gpu", action="store_true", help="导出时使用 CUDA + NVENC 硬件加速编码（需 NVIDIA GPU）")
+    parser.add_argument(
+        "--output-fps",
+        type=float,
+        default=60,
+        metavar="HZ",
+        help="导出视频帧率（默认 60fps）",
+    )
     parser.add_argument("--pad-before", type=float, default=2, help="击杀开始前保留秒数")
     parser.add_argument("--pad-after", type=float, default=0.5, help="击杀结束后保留秒数")
     parser.add_argument(
@@ -75,6 +90,27 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
         "--no-missile-prefix",
         action="store_true",
         help="不在集锦开头额外复制导弹片段（默认会复制一份按时间排序放在开头）",
+    )
+    parser.add_argument(
+        "--fixed-duration-frames",
+        type=int,
+        default=None,
+        metavar="N",
+        help="固定每段剪辑帧数（如 168=2.8s@60fps），未设置则不启用",
+    )
+    parser.add_argument(
+        "--fixed-duration-min",
+        type=float,
+        default=FIXED_DURATION_ACCEPT_MIN,
+        metavar="SEC",
+        help=f"自然时长低于此值不执行固定时长调整（默认 {FIXED_DURATION_ACCEPT_MIN}s）",
+    )
+    parser.add_argument(
+        "--fixed-duration-max",
+        type=float,
+        default=FIXED_DURATION_ACCEPT_MAX,
+        metavar="SEC",
+        help=f"自然时长高于此值不执行固定时长调整（默认 {FIXED_DURATION_ACCEPT_MAX}s）",
     )
 
 
