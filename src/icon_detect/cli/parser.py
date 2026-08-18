@@ -8,6 +8,7 @@ from pathlib import Path
 from icon_detect.constants import (
     CLIPS_DIR,
     DEFAULT_CLS_THRESH,
+    DEFAULT_FIXED_DURATION_FRAMES,
     DEFAULT_MATCH_THRESH,
     FIXED_DURATION_ACCEPT_MAX,
     FIXED_DURATION_ACCEPT_MIN,
@@ -94,9 +95,10 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--fixed-duration-frames",
         type=int,
-        default=None,
+        default=DEFAULT_FIXED_DURATION_FRAMES,
         metavar="N",
-        help="固定每段剪辑帧数（如 168=2.8s@60fps）；前垫固定不变、只调整后垫，击杀偏移量恒定；未设置则不启用",
+        help=f"固定每段剪辑帧数，默认开启 {DEFAULT_FIXED_DURATION_FRAMES} 帧（2.8s@60fps）；"
+        "前垫固定不变、只调整后垫，击杀偏移量恒定；传 0 可禁用",
     )
     parser.add_argument(
         "--fixed-duration-min",

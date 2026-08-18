@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from ..constants import FIXED_DURATION_ACCEPT_MAX, FIXED_DURATION_ACCEPT_MIN, FFMPEG
+from ..constants import DEFAULT_FIXED_DURATION_FRAMES, FIXED_DURATION_ACCEPT_MAX, FIXED_DURATION_ACCEPT_MIN, FFMPEG
 from ..detection.infer import InferConfig, collect_combined, collect_hit_frame_indices
 from ..detection.missile import warmup_missile_ocr
 from ..utils.progress import print_step
@@ -133,7 +133,7 @@ def run_clip(
     missile_prefix: bool = True,
     use_cuda: bool = False,
     output_fps: float = 60,
-    fixed_duration_frames: int | None = None,
+    fixed_duration_frames: int = DEFAULT_FIXED_DURATION_FRAMES,
     fixed_duration_accept_min: float = FIXED_DURATION_ACCEPT_MIN,
     fixed_duration_accept_max: float = FIXED_DURATION_ACCEPT_MAX,
 ) -> ClipPlan:

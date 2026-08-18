@@ -6,7 +6,12 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ..constants import FIXED_DURATION_ACCEPT_MAX, FIXED_DURATION_ACCEPT_MIN, TAIL_APPEND_SEC
+from ..constants import (
+    DEFAULT_FIXED_DURATION_FRAMES,
+    FIXED_DURATION_ACCEPT_MAX,
+    FIXED_DURATION_ACCEPT_MIN,
+    TAIL_APPEND_SEC,
+)
 from ..video.index import VideoPtsIndex
 
 
@@ -229,8 +234,8 @@ def build_clip_plan(
     missile_pad_before: float = 5.0,
     missile_pad_after: float = 5.0,
     missile_prefix: bool = True,
-    fixed_duration_frames: int | None = None,
-    fixed_duration_fps: float = 10.0,
+    fixed_duration_frames: int = DEFAULT_FIXED_DURATION_FRAMES,
+    fixed_duration_fps: float = 60.0,
     fixed_duration_accept_min: float = FIXED_DURATION_ACCEPT_MIN,
     fixed_duration_accept_max: float = FIXED_DURATION_ACCEPT_MAX,
 ) -> ClipPlan:
