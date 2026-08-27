@@ -488,6 +488,37 @@ def cmd_clip_batch(args: argparse.Namespace) -> None:
     print(f"\n批量完成: {len(videos)} 个视频已写入 {args.output_dir.resolve()}")
 
 
+def cmd_auto_cut(args: argparse.Namespace) -> None:
+    from icon_detect.autocut.pipeline import DEFAULT_BGM, run_autocut
+
+    if args.bgm is None:
+        bgm = DEFAULT_BGM
+    elif str(args.bgm).lower() == "none":
+        bgm = None
+    else:
+        bgm = args.bgm
+
+    gpu: bool | None = None
+    if args.gpu:
+        gpu = True
+    elif args.cpu:
+        gpu = False
+
+    run_autocut(
+        args.video,
+        output=args.output,
+        bgm=bgm,
+        json_path=args.json,
+        speed=args.speed,
+        cut_value=args.cut_value,
+        fade_sec=args.fade_sec,
+        tail_sec=args.tail_sec,
+        gpu=gpu,
+        dry_run=args.dry_run,
+        show_progress=not args.no_progress,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     from icon_detect.cli.parser import build_parser
 

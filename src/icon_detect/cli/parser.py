@@ -135,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     from icon_detect.cli.handlers import (
+        cmd_auto_cut,
         cmd_clip,
         cmd_clip_batch,
         cmd_clip_extract,
@@ -292,5 +293,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_clip_common_args(cb)
     cb.set_defaults(func=cmd_clip_batch)
+
+    ac = sub.add_parser("auto-cut", help="自动剪辑（前段 1.45x + 尾部按钮截断）并合成 BGM")
+    ac.add_argument("--video", type=Path, required=True, help="输入视频（clip 产物，需同名 JSON 清单）")
+    ac.add_argument("-o", "--output", type=Path, default=None, help="输出路径（默认 <video>_bgm.mp4）")
+    ac.add_argument("--bgm", type=Path, default=None, help="BGM 音频（默认 data/bgm.wav；传 none 可禁用）")
+    ac.add_argument("--json", type=Path, default=None, help="同名清单 JSON 路径（默认与视频同名 .json）")
+    ac.add_argument("--speed", type=float, default=1.45, help="前段播放倍速（默认 1.45）")
+    ac.add_argument(
+        "--cut-value",
+        type=int,
+        default=113,
+        help="尾部\"返回大厅(N秒)\"截断阈值：首次显示 N 秒的帧及其后全部剪掉（默认 113）",
+    )
+    ac.add_argument("--fade-sec", type=float, default=15.0, help="音频结尾淡出时长（默认 15s）")
+    ac.add_argument(
+        "--tail-sec",
+        type=float,
+        default=20.0,
+        help="无 JSON 清单时的前后分切兜底：倒数 N 秒处（默认 20s）",
+    )
+    ac.add_argument("--dry-run", action="store_true", help="只检测并打印计划/ffmpeg 命令，不渲染")
+    ac.add_argument("--no-progress", action="store_true", help="关闭进度条")
+    g = ac.add_mutually_exclusive_group()
+    g.add_argument(
+        "--gpu",
+        action="store_true",
+        help="强制使用 h264_nvenc + cuda 硬解（默认自动：检测到 nvenc 即启用）",
+    )
+    g.add_argument("--cpu", action="store_true", help="强制 libx264 软编码（不用 GPU）")
+    ac.set_defaults(func=cmd_auto_cut)
 
     return p
