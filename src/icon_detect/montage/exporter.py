@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from ..constants import DEFAULT_FIXED_DURATION_FRAMES, FIXED_DURATION_ACCEPT_MAX, FIXED_DURATION_ACCEPT_MIN, FFMPEG
@@ -45,6 +44,21 @@ def _extract_segment(
         raise RuntimeError(f"ffmpeg 切片失败: {err}")
 
 
+def _make_export_tmp(output_path: Path) -> Path:
+    """在输出区创建临时目录存放分段切片（不用系统临时区：同盘拷贝更快，
+    且受限环境通常禁写平台 temp）。注意不要用 tempfile.mkdtemp：
+    其 0o700 权限会让子进程（ffmpeg）打开该目录内文件被拒。调用方负责 rmtree。"""
+    import uuid
+
+    from ..constants import OUTPUT_DIR
+
+    base = OUTPUT_DIR / "tmp"
+    base.mkdir(parents=True, exist_ok=True)
+    tmp_dir = base / f"kill_clips_{output_path.stem}_{uuid.uuid4().hex[:12]}"
+    tmp_dir.mkdir()
+    return tmp_dir
+
+
 def export_highlight_video(
     video: Path,
     clips: list[LabeledTimeRange],
@@ -69,8 +83,8 @@ def export_highlight_video(
         _extract_segment(video, output_path, clips[0], source_fps=source_fps, use_cuda=use_cuda)
         return output_path
 
-    with tempfile.TemporaryDirectory(prefix="kill_clips_") as tmp:
-        tmp_dir = Path(tmp)
+    tmp_dir = _make_export_tmp(output_path)
+    try:
         parts: list[Path] = []
         pbar = tqdm(total=n, desc="导出", unit="段", ncols=100, file=sys.stdout) if show_progress else None
         for i, seg in enumerate(clips):
@@ -112,6 +126,8 @@ def export_highlight_video(
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(f"ffmpeg 拼接失败: {err}")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return output_path
 

@@ -6,7 +6,6 @@ import argparse
 from pathlib import Path
 
 from icon_detect.constants import (
-    CLIPS_DIR,
     DEFAULT_CLS_THRESH,
     DEFAULT_FIXED_DURATION_FRAMES,
     DEFAULT_MATCH_THRESH,
@@ -61,7 +60,27 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
     _add_time_range_group(parser)
     _add_fps_arg(parser, required=True)
     _add_detect_args(parser)
-    parser.add_argument("--gpu", action="store_true", help="导出时使用 CUDA + NVENC 硬件加速编码（需 NVIDIA GPU）")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="强制覆盖已存在的输出（默认第一阶段成片存在则跳过检测导出，BGM 成片存在则跳过合成）",
+    )
+    parser.add_argument(
+        "--no-autocut",
+        action="store_true",
+        help="只导出击杀集锦，不接自动剪辑 + BGM 合成（默认开启）",
+    )
+    g = parser.add_mutually_exclusive_group()
+    g.add_argument(
+        "--gpu",
+        action="store_true",
+        help="强制 GPU 编码 h264_nvenc + cuda 硬解",
+    )
+    g.add_argument(
+        "--cpu",
+        action="store_true",
+        help="强制 libx264 软编码（默认自动：检测到 nvenc 即启用 GPU）",
+    )
     parser.add_argument(
         "--output-fps",
         type=float,
@@ -125,11 +144,14 @@ def build_parser() -> argparse.ArgumentParser:
   python main.py template --image frames/positive/frame_02671_t00044715ms.jpg
   python main.py train --positive-dir frames/positive --negative-dir frames/negative --epochs 80
   python main.py infer --video test.mp4 --image-dir frames --start-sec 88 --end-sec 90 --fps 5 --output-dir output/icon_detect
-  python main.py clip --video test.mp4 --fps 10 -o output/clips/highlight.mp4
-  python main.py clip --video test.mp4 --start-sec 70 --end-sec 80 --fps 10
-  python main.py clip-batch --input-dir input_videos --output-dir output/clips --fps 10
-  python main.py clip --video test.mp4 --fps 10 --use-classifier -o output/clips/highlight.mp4
-  python main.py clip --video test.mp4 --fps 10 --template-only -o output/clips/highlight.mp4
+  python main.py clip --video test.mp4 --fps 10
+      -> output/clips/test/{test.mp4, test_bgm.mp4, test.json}
+  python main.py clip --video test.mp4 --fps 10 -o output/out
+      -> output/out/test/ 三件套（集锦、BGM 成片、清单）
+  python main.py clip-batch --input-dir input_videos --output-dir data/test/output --fps 10
+      -> 每个输入视频一个子目录
+  python main.py clip --video test.mp4 --fps 10 --no-autocut   # 只出集锦
+  python main.py clip --video test.mp4 --fps 10 --force        # 忽略缓存全部重做
 """,
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -258,9 +280,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inf.set_defaults(func=cmd_infer)
 
-    cl = sub.add_parser("clip", help="检测击杀并剪辑集锦")
+    cl = sub.add_parser("clip", help="检测击杀并剪辑集锦（默认接自动剪辑 + BGM 合成）")
     cl.add_argument("--video", type=Path, required=True)
-    cl.add_argument("-o", "--output", type=Path, default=CLIPS_DIR / "highlight.mp4")
+    cl.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="输出根目录，将创建 <DIR>/<视频名>/ 存放 集锦.mp4 + _bgm.mp4 + 清单.json"
+        "（默认 output/clips/<视频名>/）",
+    )
     cl.add_argument(
         "--segments-dir",
         type=Path,

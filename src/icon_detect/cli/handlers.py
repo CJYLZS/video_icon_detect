@@ -29,7 +29,14 @@ from icon_detect.detection.roi import (
     build_roi_template,
     detect_roi_rect,
 )
+from icon_detect.autocut.render import resolve_gpu_mode
 from icon_detect.montage.exporter import run_clip
+from icon_detect.montage.layout import (
+    VideoOutput,
+    autocut_cached,
+    build_video_output,
+    stage_one_cached,
+)
 from icon_detect.montage.planner import ClipPlan
 from icon_detect.utils.preview import export_roi_preview
 from icon_detect.video.extract import export_frames_from_icons, extract_frames
@@ -375,9 +382,12 @@ def _process_clip_video(
         raise SystemExit(f"无检测帧: {video.name}")
 
     step = sample_step(fps, args.fps)
-    use_gpu = getattr(args, "gpu", False)
+    requested = _accel_requested(args)
+    use_gpu = resolve_gpu_mode(requested)
     if use_gpu:
-        print("GPU 加速: 已启用 (CUDA)")
+        print("编码加速: h264_nvenc + cuda 硬解（GPU）")
+    else:
+        print("编码加速: libx264 软编码（CPU）")
     print(f"视频: {video.name}, 总帧数: {total}, 原始 fps: {fps:.2f}")
     print(f"剪辑范围: {start_sec:.2f}s ~ {end_sec:.2f}s, 采样 {args.fps}/s (步长 {step})")
     if args.output_fps != args.fps:
@@ -419,24 +429,134 @@ def _print_clip_result(plan: ClipPlan, output: Path, meta_path: Path | None) -> 
         print(f"区间 JSON: {meta_path.resolve()}")
 
 
-def cmd_clip(args: argparse.Namespace) -> None:
-    cls_only = _resolve_cls_only(args)
-    _ensure_template(cls_only=cls_only)
-    _print_detect_mode(
-        cls_only=cls_only,
-        use_classifier=args.use_classifier,
-        cls_thresh=args.cls_thresh,
-        label="检测模式",
-    )
+def _accel_requested(args: argparse.Namespace) -> bool | None:
+    """解析 --gpu/--cpu 三态请求：True=强制 GPU，False=强制 CPU，None=自动。"""
+    if getattr(args, "gpu", False):
+        return True
+    if getattr(args, "cpu", False):
+        return False
+    return None
 
-    plan = _process_clip_video(
-        args,
-        args.video,
-        args.output,
-        meta_path=args.meta_json,
-        segments_dir=args.segments_dir,
+
+def _run_autocut_stage(
+    vo: VideoOutput,
+    *,
+    force: bool = False,
+    accel: bool | None = None,
+    show_progress: bool = True,
+    enabled: bool = True,
+) -> Path | None:
+    """第二阶段：对第一阶段成片执行 auto-cut + BGM 合成，返回成片路径或 None。
+
+    集成模式下该阶段失败只告警，不阻断已生成的集锦。
+    """
+    from icon_detect.autocut.pipeline import DEFAULT_BGM, run_autocut
+
+    if not enabled:
+        return None
+    if not (vo.clip.is_file() and vo.manifest.is_file()):
+        print("警告: 缺少集锦成片或片段清单，跳过自动剪辑")
+        return None
+    if not DEFAULT_BGM.is_file():
+        print(f"警告: 未找到 BGM ({DEFAULT_BGM})，跳过自动剪辑")
+        return None
+    if autocut_cached(vo, force=force):
+        print(f"[缓存] BGM 成片已存在，跳过合成: {vo.cut.name}（--force 强制重做）")
+        return vo.cut
+    try:
+        run_autocut(
+            vo.clip,
+            output=vo.cut,
+            json_path=vo.manifest,
+            gpu=accel,
+            show_progress=show_progress,
+        )
+        return vo.cut
+    except SystemExit as exc:
+        print(f"警告: 自动剪辑中止: {exc}")
+    except Exception as exc:  # noqa: BLE001 - 失败不阻断主产物输出
+        print(f"警告: 自动剪辑失败: {type(exc).__name__}: {exc}")
+    return None
+
+
+def _ensure_stats_txt(
+    vo: VideoOutput,
+    *,
+    force: bool = False,
+    show_progress: bool = True,
+) -> Path | None:
+    """从尾段结算界面提取战局统计写入 战局统计.txt（独立于 auto-cut 阶段）。"""
+    from icon_detect.autocut.summary import write_stats_file
+
+    if vo.stats.is_file() and not force:
+        print(f"[缓存] 战局统计已存在，跳过: {vo.stats.name}")
+        return vo.stats
+    if not (vo.clip.is_file() and vo.manifest.is_file()):
+        return None
+    try:
+        ok = write_stats_file(
+            vo.clip,
+            vo.manifest,
+            vo.stats,
+            show_progress=show_progress,
+        )
+        return vo.stats if ok else None
+    except Exception as exc:  # noqa: BLE001 - 统计失败不影响视频产物
+        print(f"警告: 战局统计提取失败: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _print_output_tree(vo: VideoOutput) -> None:
+    print(f"\n输出目录: {vo.root.resolve()}")
+    for label, p in (
+        ("剪辑前(集锦)", vo.clip),
+        ("剪辑后(BGM)", vo.cut),
+        ("清单 JSON", vo.manifest),
+        ("战局统计", vo.stats),
+    ):
+        mark = "✓" if p.is_file() else "×"
+        print(f"  [{mark}] {label}: {p.name}")
+
+
+def cmd_clip(args: argparse.Namespace) -> None:
+    video = args.video
+    if not video.is_file():
+        raise FileNotFoundError(f"视频不存在: {video}")
+
+    out_root = args.output if args.output is not None else CLIPS_DIR / video.stem
+    vo = build_video_output(out_root, video.stem)
+    accel = _accel_requested(args)
+
+    if stage_one_cached(vo, force=args.force):
+        print(f"[缓存] 第一阶段成片+清单已存在，跳过检测与导出: {vo.clip.name}")
+        print("       （--force 强制重做；--no-autocut 只出集锦）")
+    else:
+        cls_only = _resolve_cls_only(args)
+        _ensure_template(cls_only=cls_only)
+        _print_detect_mode(
+            cls_only=cls_only,
+            use_classifier=args.use_classifier,
+            cls_thresh=args.cls_thresh,
+            label="检测模式",
+        )
+        plan = _process_clip_video(
+            args,
+            video,
+            vo.clip,
+            meta_path=args.meta_json,
+            segments_dir=args.segments_dir,
+        )
+        _print_clip_result(plan, vo.clip, args.meta_json)
+
+    _run_autocut_stage(
+        vo,
+        force=args.force,
+        accel=accel,
+        show_progress=not args.no_progress,
+        enabled=not args.no_autocut,
     )
-    _print_clip_result(plan, args.output, args.meta_json)
+    _ensure_stats_txt(vo, force=args.force, show_progress=not args.no_progress)
+    _print_output_tree(vo)
 
 
 def cmd_clip_batch(args: argparse.Namespace) -> None:
@@ -463,29 +583,72 @@ def cmd_clip_batch(args: argparse.Namespace) -> None:
     if args.segments_dir:
         args.segments_dir.mkdir(parents=True, exist_ok=True)
 
+    accel = _accel_requested(args)
+    show_progress = not args.no_progress
+    autocut_enabled = not getattr(args, "no_autocut", False)
+
     print(f"输入目录: {args.input_dir.resolve()}")
     print(f"输出目录: {args.output_dir.resolve()}")
+    layout_note = (
+        "集锦 mp4 + BGM 成片 + 清单 json + 战局统计 txt"
+        if autocut_enabled
+        else "集锦 mp4 + 清单 json + 战局统计 txt（--no-autocut）"
+    )
+    print(f"输出布局: <输出目录>/<视频名>/ {layout_note}")
+    if autocut_enabled:
+        print("第二阶段（auto-cut + BGM）默认开启；--no-autocut 关闭，--force 忽略缓存")
     print(f"共 {len(videos)} 个视频，按文件名顺序处理")
+
+    rendered = cached = failed = cut_ready = 0
 
     for i, video in enumerate(videos, 1):
         print(f"\n{'=' * 60}")
         print(f"[{i}/{len(videos)}] {video.name}")
         print("=" * 60)
 
-        output = args.output_dir / video.name
+        vo = build_video_output(args.output_dir, video.stem)
         meta_path = args.meta_dir / f"{video.stem}.json" if args.meta_dir else None
         segments_dir = args.segments_dir / video.stem if args.segments_dir else None
 
-        plan = _process_clip_video(
-            args,
-            video,
-            output,
-            meta_path=meta_path,
-            segments_dir=segments_dir,
-        )
-        _print_clip_result(plan, output, meta_path)
+        if stage_one_cached(vo, force=args.force):
+            print("[缓存] 第一阶段成片+清单已存在，跳过检测与导出（--force 强制重做）")
+            cached += 1
+        else:
+            try:
+                plan = _process_clip_video(
+                    args,
+                    video,
+                    vo.clip,
+                    meta_path=meta_path,
+                    segments_dir=segments_dir,
+                )
+                _print_clip_result(plan, vo.clip, meta_path)
+                rendered += 1
+            except (SystemExit, Exception) as exc:  # noqa: BLE001 - 单视频失败不中断批量
+                detail = str(exc) or type(exc).__name__
+                print(f"[失败] {video.name}: {detail}")
+                failed += 1
+                continue
 
-    print(f"\n批量完成: {len(videos)} 个视频已写入 {args.output_dir.resolve()}")
+        if _run_autocut_stage(
+            vo,
+            force=args.force,
+            accel=accel,
+            show_progress=show_progress,
+            enabled=autocut_enabled,
+        ) is not None:
+            cut_ready += 1
+        _ensure_stats_txt(vo, force=args.force, show_progress=show_progress)
+        _print_output_tree(vo)
+
+    total = len(videos)
+    print(f"\n{'=' * 60}")
+    print(f"批量完成: 共 {total} 个视频 | 新导出 {rendered} | 缓存跳过 {cached} | 失败 {failed}")
+    if autocut_enabled:
+        print(f"BGM 成片就绪: {cut_ready}/{total} 个")
+    else:
+        print("（--no-autocut：未执行自动剪辑阶段）")
+    print(f"输出根目录: {args.output_dir.resolve()}")
 
 
 def cmd_auto_cut(args: argparse.Namespace) -> None:

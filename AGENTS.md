@@ -21,8 +21,8 @@ Single CLI: `python main.py <subcommand>`
 | `template` | Build binary template from a full-frame screenshot |
 | `train` | Train optional CNN classifier |
 | `infer` | Run detection on video or frame directory |
-| `clip` | Generate kill highlight montage |
-| `clip-batch` | Batch clip across all videos in `input/` |
+| `clip` | Detect kills → montage → **auto-cut + BGM synth（默认开启）**，每视频一个输出目录 |
+| `clip-batch` | Batch the full pipeline across all videos in a dir |
 | `auto-cut` | Auto speed-ramp edit + BGM synth from a clip manifest JSON (`src/icon_detect/autocut/`) |
 | `classify-dir` | CLS-only classification on a directory of images (`tools/classify_dir.py`) |
 
@@ -45,11 +45,13 @@ video_icon_detect/
 │   │   └── extract.py               # Frame export to disk (ffmpeg or FFmpegSource)
 │   ├── montage/                     # Highlight montage
 │   │   ├── planner.py               # Hit grouping, interval merging, ClipPlan, save_ranges_json/save_clip_manifest
-│   │   └── exporter.py              # ffmpeg segment extraction, concat export, run_clip orchestration
+│   │   ├── exporter.py              # ffmpeg segment extraction, concat export, run_clip orchestration
+│   │   └── layout.py                # 主流程输出布局（每视频一个目录三件套）+ 缓存判断纯函数
 │   ├── autocut/                     # auto-cut：变速剪辑 + BGM 合成
 │   │   ├── manifest.py              # 同名 JSON 清单解析 + ffprobe 媒体信息（fps/采样率）
 │   │   ├── cut_button.py            # 尾部"返回大厅(N秒)"倒数 OCR 截断点检测
 │   │   ├── landing.py               # 导弹落地切镜检测（暗角周期 + 帧差精化）
+│   │   ├── summary.py               # 结算界面战局统计提取（积分/淘汰 + 不定字段 -> 战局统计.txt）
 │   │   ├── render.py                # filter_complex 构造（帧号/样本坐标）+ ffmpeg 执行
 │   │   └── pipeline.py              # AutoCutPlan 编排（检测 -> 计划 -> 渲染）
 │   ├── cli/                         # CLI layer
@@ -103,6 +105,33 @@ Coordinate-system rules (learned from real renders — do not regress):
 - `afade` st and BGM `atrim` end must use the **output** timeline (front segment shrinks by 1/speed); BGM delay = landing_sec / speed.
 
 
+## 主流程（clip / clip-batch）
+
+`clip` / `clip-batch` 已集成 auto-cut，默认开启，全流程一条命令：
+
+```
+python main.py clip --video <raw.mp4> --fps 10            # 默认输出 output/clips/<stem>/
+python main.py clip-batch --input-dir data/test/input --output-dir data/test/output --fps 10
+```
+
+输出布局（`montage/layout.py`）—— 每个输入视频一个独立目录，内含四件套：
+- `<stem>.mp4` 第一阶段成片（击杀集锦，自动剪辑前）
+- `<stem>_bgm.mp4` 第二阶段成片（1.45x 变速 + 尾部倒数截断 + BGM 合成）
+- `<stem>.json` 片段清单（auto-cut 的同名 JSON）
+- `战局统计.txt` 结算界面提取的模式/结果/积分/淘汰/不定字段
+
+关键规则（不要回退）：
+- **缓存默认开启**：第一阶段成片+清单同时存在才跳过检测导出（只 mp4 无 json 视为不完整，会重跑）；BGM 成片存在即跳过合成。`--force` 忽略全部缓存强制重做。
+- **容错**：批量模式下单视频第一阶段失败不中断后续视频；第二阶段失败只告警，保留已生成的集锦。
+- 编码加速对两阶段统一生效：`--gpu`/`--cpu` 三态覆盖（互斥），默认自动检测 nvenc → `h264_nvenc -preset p7 -cq 18` + `-hwaccel cuda`。
+- `-o/--output` 与 batch 的 `--output-dir` 现在是**根目录**语义（其下建 `<stem>/` 子目录）；`--meta-json`/`--meta-dir`、`--segments-dir` 仍可选叠加。
+- `--no-autocut` 只出集锦 + 清单；独立 `auto-cut` 子命令保留不变。
+- **战局统计提取**（`autocut/summary.py`，独立于 auto-cut 阶段、有自己的缓存）：在尾段 0.5s 粗扫结算界面。识别特征 = 左上角含"模式"（如"突破模式—荣都战场"）+ 左下角 logo 模糊命中（美术字 OCR 常读作"平精美"，按 和平/平精/精英 双字匹配，举报/GAME 兜底）。统计块 ROI 约x[0.20,0.52] y[0.24,0.66]，按 OCR 几何行分组 + x 邻近配对解析；固定字段 积分/淘汰 的值在标签下一行，不定字段标签值同行。**必须解析出 积分/淘汰 之一才接受该帧**——结算流程有统计页→战绩表格页多页，表格页同样带模式/logo 特征，会误触发。已知限制：rec 偶发丢数字（"0点"读作"点"），放大也救不回，如实输出。
+- **地图白名单纠错**：`summary.KNOWN_MAPS`（当前：荣都战场/沙漠绿洲/海湾基地，新图追加即可）。模式串按连字符（`-—－一`，OCR 常把 — 读作一）切出地图名，difflib 相似度对齐到白名单最近项（实测"茶都战场"→"荣都战场"）；相似度 <0.4 视为未知地图保留原样。
+- **OCR 引擎陷阱（不要回退）**：`detection.missile._get_ocr()` 是 `Global.use_det=False` 的**纯识别**引擎，只适合单行文本（倒数按钮/模式名/logo 单行 ROI）。多行文本块必须用 `autocut/summary._get_stats_engine()`（det+rec 完整管线），否则整图返回空。
+- 集锦导出的分段临时目录固定在 `output/tmp/kill_clips_*`（同盘 + 受限环境通常禁写平台 temp）。**不要用 `tempfile.mkdtemp`/`TemporaryDirectory`**：其 0o700 权限会让子进程 ffmpeg 打开目录内文件被拒（Permission denied）；用普通 `mkdir` + uuid 目录名，用完 `rmtree`。
+
+
 ## classify-dir
 
 Standalone script: `python tools/classify_dir.py <image_dir>`
@@ -125,7 +154,7 @@ python tools/classify_dir.py data/test -o output/roi_results --save-roi
 
 ## Development
 
-- **Tests**: `pytest tests/ -q -p no:cacheprovider` (30 tests: 16 CLI mode + 14 auto-cut unit tests; the cache plugin is blocked by the file sandbox).
+- **Tests**: `pytest tests/ -q -p no:cacheprovider` (52 tests: 16 CLI mode + 14 auto-cut + 22 main-pipeline layout/cache/stats-parser/map-correction tests; the cache plugin is blocked by the file sandbox).
 - **Dependencies**: managed via `uv pip install`. `requirements.txt` lists 6 packages (opencv-python, numpy, torch, rapidocr, onnxruntime, pytest).
 - GPU (CUDA) is optional; PyTorch falls back to CPU.
 - Template files live in `template/` and are required for detection. `template/icon_classifier.pt` is optional but required for the default classifier-only mode.
