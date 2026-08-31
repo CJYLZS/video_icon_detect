@@ -67,14 +67,88 @@ class TestCacheFlags:
         assert stage_one_cached(vo)
         assert not stage_one_cached(vo, force=True)
 
-    def test_autocut_cache(self, tmp_root: Path) -> None:
-        from icon_detect.montage.layout import autocut_cached, build_video_output
+    def test_autocut_cache_requires_matching_recipe(self, tmp_root: Path, monkeypatch) -> None:
+        """第二阶段缓存不只看文件存在，还要成片里记录的渲染配方与当前一致。
 
-        vo = build_video_output(tmp_root, "v3")
-        assert not autocut_cached(vo)
+        文件存在但无配方标记（历史成片）或标记过期（渲染逻辑变更后）都须重做。
+        """
+        from icon_detect.montage import layout
+
+        vo = layout.build_video_output(tmp_root, "v3")
+        current = layout.autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=15.0)
+
+        assert not layout.autocut_cached(vo, recipe=current)
+
+        # 无标记的历史成片：不命中
         _touch(vo.cut)
-        assert autocut_cached(vo)
-        assert not autocut_cached(vo, force=True)
+        monkeypatch.setattr(layout, "read_recipe_tag", lambda p: None)
+        assert not layout.autocut_cached(vo, recipe=current)
+
+        # 标记过期：不命中
+        monkeypatch.setattr(layout, "read_recipe_tag", lambda p: "autocut-v0;speed=1.45")
+        assert not layout.autocut_cached(vo, recipe=current)
+
+        # 标记一致：命中
+        monkeypatch.setattr(layout, "read_recipe_tag", lambda p: current)
+        assert layout.autocut_cached(vo, recipe=current)
+        assert not layout.autocut_cached(vo, recipe=current, force=True)
+
+
+class TestAutocutRecipeTag:
+    def test_tag_includes_version_and_params(self) -> None:
+        from icon_detect.montage.layout import AUTOCUT_RECIPE_VERSION, autocut_recipe_tag
+
+        tag = autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=15.0)
+        assert tag.startswith(f"autocut-v{AUTOCUT_RECIPE_VERSION};")
+        assert "speed=1.45" in tag
+        assert "cut=113" in tag
+        assert "fade=15" in tag
+
+    def test_param_change_changes_tag(self) -> None:
+        """改 --speed / --cut-value / --fade-sec 都要让缓存失效。"""
+        from icon_detect.montage.layout import autocut_recipe_tag
+
+        base = autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=15.0)
+        assert autocut_recipe_tag(speed=1.5, cut_value=113, fade_sec=15.0) != base
+        assert autocut_recipe_tag(speed=1.45, cut_value=114, fade_sec=15.0) != base
+        assert autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=12.0) != base
+
+    def test_tag_is_stable(self) -> None:
+        from icon_detect.montage.layout import autocut_recipe_tag
+
+        a = autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=15.0)
+        b = autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=15.0)
+        assert a == b
+
+    def test_tag_has_no_ffmpeg_metadata_hostile_chars(self) -> None:
+        """标记要经 -metadata comment= 传给 ffmpeg，不能含换行/等号歧义外的怪字符。"""
+        from icon_detect.montage.layout import autocut_recipe_tag
+
+        tag = autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=15.0)
+        assert "\n" not in tag and "\r" not in tag
+        assert '"' not in tag and "'" not in tag
+
+
+class TestStageRecipeSource:
+    def test_stage_recipe_follows_pipeline_defaults(self) -> None:
+        """主流程用的配方标记必须来自 plan_autocut 的默认参数，不能各处硬编码。
+
+        否则改了 plan_autocut 的默认 speed/cut_value/fade_sec 后，
+        缓存比对仍用旧值，已过期的成片会被误判为命中。
+        """
+        import inspect
+
+        from icon_detect.autocut.pipeline import plan_autocut
+        from icon_detect.cli.handlers import _stage_recipe
+        from icon_detect.montage.layout import autocut_recipe_tag
+
+        sig = inspect.signature(plan_autocut).parameters
+        expected = autocut_recipe_tag(
+            speed=sig["speed"].default,
+            cut_value=sig["cut_value"].default,
+            fade_sec=sig["fade_sec"].default,
+        )
+        assert _stage_recipe() == expected
 
 
 class TestAccelRequested:

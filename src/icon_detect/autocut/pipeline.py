@@ -35,6 +35,16 @@ class AutoCutPlan:
     speed: float = 1.45
     fade_sec: float = 15.0
     bgm: Path | None = DEFAULT_BGM
+    cut_value: int = 113  # 仅用于配方标记（检测本身已在 plan_autocut 内完成）
+
+    @property
+    def recipe(self) -> str:
+        """本次渲染的配方标记，写入成片 metadata 并用于第二阶段缓存比对。"""
+        from ..montage.layout import autocut_recipe_tag
+
+        return autocut_recipe_tag(
+            speed=self.speed, cut_value=self.cut_value, fade_sec=self.fade_sec
+        )
 
     @property
     def cut_sec(self) -> float:
@@ -176,10 +186,16 @@ def plan_autocut(
         speed=speed,
         fade_sec=fade_sec,
         bgm=bgm,
+        cut_value=cut_value,
     )
 
 
-def render_autocut(plan: AutoCutPlan, *, has_audio: bool = True, gpu: bool | None = None) -> Path:
+def render_autocut(
+    plan: AutoCutPlan,
+    *,
+    has_audio: bool = True,
+    gpu: bool | None = None,
+) -> Path:
     """渲染阶段：按计划执行 ffmpeg。gpu=None 时自动检测 nvenc。"""
     info = probe_media_info(plan.video)
     use_gpu = resolve_gpu_mode(gpu)
@@ -200,6 +216,7 @@ def render_autocut(plan: AutoCutPlan, *, has_audio: bool = True, gpu: bool | Non
         align_sec=plan.align_sec_out,
         has_audio=has_audio,
         gpu=use_gpu,
+        recipe=plan.recipe,
     )
     plan.output.parent.mkdir(parents=True, exist_ok=True)
     run_ffmpeg(cmd)
@@ -248,6 +265,7 @@ def run_autocut(
             fade_sec=plan.fade_sec,
             align_sec=plan.align_sec_out,
             has_audio=True,
+            recipe=plan.recipe,
         )
         print("\n[dry-run] ffmpeg 命令:\n  " + " ".join(cmd))
         return plan

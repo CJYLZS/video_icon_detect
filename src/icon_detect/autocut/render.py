@@ -161,6 +161,7 @@ def build_autocut_command(
     align_sec: float,
     has_audio: bool,
     gpu: bool = False,
+    recipe: str | None = None,
 ) -> list[str]:
     if cut_frame <= split_frame:
         raise ValueError(f"截断帧 ({cut_frame}) 必须在分切帧 ({split_frame}) 之后")
@@ -187,8 +188,11 @@ def build_autocut_command(
         cmd += ["-c:v", "h264_nvenc", "-preset", "p7", "-cq", "18"]
     else:
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+    cmd += ["-c:a", "aac", "-b:a", "192k"]
+    if recipe:
+        # 渲染配方标记内嵌到成片，供第二阶段缓存比对（见 montage/layout.py）
+        cmd += ["-metadata", f"comment={recipe}"]
     cmd += [
-        "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(output),
     ]

@@ -438,6 +438,25 @@ def _accel_requested(args: argparse.Namespace) -> bool | None:
     return None
 
 
+def _stage_recipe() -> str:
+    """主流程第二阶段的配方标记：取 plan_autocut 的默认参数，避免多处硬编码。
+
+    主流程调用 run_autocut 时不覆盖 speed/cut_value/fade_sec，
+    因此这里必须与 plan_autocut 的签名默认值保持同源。
+    """
+    import inspect
+
+    from icon_detect.autocut.pipeline import plan_autocut
+    from icon_detect.montage.layout import autocut_recipe_tag
+
+    sig = inspect.signature(plan_autocut).parameters
+    return autocut_recipe_tag(
+        speed=sig["speed"].default,
+        cut_value=sig["cut_value"].default,
+        fade_sec=sig["fade_sec"].default,
+    )
+
+
 def _run_autocut_stage(
     vo: VideoOutput,
     *,
@@ -460,9 +479,11 @@ def _run_autocut_stage(
     if not DEFAULT_BGM.is_file():
         print(f"警告: 未找到 BGM ({DEFAULT_BGM})，跳过自动剪辑")
         return None
-    if autocut_cached(vo, force=force):
-        print(f"[缓存] BGM 成片已存在，跳过合成: {vo.cut.name}（--force 强制重做）")
+    if autocut_cached(vo, recipe=_stage_recipe(), force=force):
+        print(f"[缓存] BGM 成片已存在且渲染配方一致，跳过合成: {vo.cut.name}")
         return vo.cut
+    if vo.cut.is_file():
+        print(f"[重做] BGM 成片渲染配方已过期，重新合成: {vo.cut.name}")
     try:
         run_autocut(
             vo.clip,

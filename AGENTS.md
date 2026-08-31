@@ -122,7 +122,11 @@ python main.py clip-batch --input-dir data/test/input --output-dir data/test/out
 - `战局统计.txt` 结算界面提取的模式/结果/积分/淘汰/不定字段
 
 关键规则（不要回退）：
-- **缓存默认开启**：第一阶段成片+清单同时存在才跳过检测导出（只 mp4 无 json 视为不完整，会重跑）；BGM 成片存在即跳过合成。`--force` 忽略全部缓存强制重做。
+- **缓存默认开启**：第一阶段成片+清单同时存在才跳过检测导出（只 mp4 无 json 视为不完整，会重跑）。`--force` 忽略全部缓存强制重做。
+- **第二阶段缓存看渲染配方标记，不只看文件存在**（`montage/layout.py`）：成片渲染时把 `autocut-v<N>;speed=..;cut=..;fade=..` 写进 mp4 的 `comment` metadata（`-metadata comment=`），`autocut_cached` 用 ffprobe 读回比对，不一致就自动重做。
+  - `AUTOCUT_RECIPE_VERSION` 是手工维护的常量：**`render.py` 滤镜语义每次实质变更都要 +1**，否则旧成片会被误判为可复用。当前 v1 = aresample 重同步版（修音画漂移）。
+  - 参数部分覆盖 `--speed`/`--cut-value`/`--fade-sec` 变更；主流程侧一律走 `handlers._stage_recipe()`，它用 `inspect` 取 `plan_autocut` 的签名默认值，**不要在别处硬编码这三个值**（改了默认值而比对仍用旧值 = 静默失配）。
+  - 无标记的历史成片 `read_recipe_tag` 返回 `None`，一律视为过期。
 - **容错**：批量模式下单视频第一阶段失败不中断后续视频；第二阶段失败只告警，保留已生成的集锦。
 - 编码加速对两阶段统一生效：`--gpu`/`--cpu` 三态覆盖（互斥），默认自动检测 nvenc → `h264_nvenc -preset p7 -cq 18` + `-hwaccel cuda`。
 - `-o/--output` 与 batch 的 `--output-dir` 现在是**根目录**语义（其下建 `<stem>/` 子目录）；`--meta-json`/`--meta-dir`、`--segments-dir` 仍可选叠加。
@@ -155,7 +159,7 @@ python tools/classify_dir.py data/test -o output/roi_results --save-roi
 
 ## Development
 
-- **Tests**: `pytest tests/ -q -p no:cacheprovider` (61 tests: 16 CLI mode + 23 auto-cut + 22 main-pipeline layout/cache/stats-parser/map-correction tests; the cache plugin is blocked by the file sandbox).
+- **Tests**: `pytest tests/ -q -p no:cacheprovider` (70 tests: 16 CLI mode + 27 auto-cut + 27 main-pipeline layout/recipe-cache/stats-parser/map-correction tests; the cache plugin is blocked by the file sandbox).
 - **Dependencies**: managed via `uv pip install`. `requirements.txt` lists 6 packages (opencv-python, numpy, torch, rapidocr, onnxruntime, pytest).
 - GPU (CUDA) is optional; PyTorch falls back to CPU.
 - Template files live in `template/` and are required for detection. `template/icon_classifier.pt` is optional but required for the default classifier-only mode.

@@ -271,6 +271,72 @@ class TestGpuCommand:
         assert "libx264 -preset fast -crf 18" in joined
 
 
+class TestPlanRecipe:
+    """AutoCutPlan 要能给出自己的配方标记，供渲染写入与缓存比对共用同一来源。"""
+
+    def _plan(self, tmp: Path, **over):
+        from icon_detect.autocut.manifest import ManifestInfo
+        from icon_detect.autocut.pipeline import AutoCutPlan
+
+        kw = dict(
+            video=tmp / "v.mp4",
+            output=tmp / "v_bgm.mp4",
+            manifest=ManifestInfo(path=None, tail_start_sec=None, missile_span=None),
+            fps=60.0,
+            total_frames=12000,
+            split_sec=100.0,
+            split_frame=6000,
+            cut_result=None,
+            align_result=None,
+            cut_frame=12000,
+        )
+        kw.update(over)
+        return AutoCutPlan(**kw)
+
+    def test_recipe_matches_layout_tag(self, tmp_json_dir: Path):
+        from icon_detect.montage.layout import autocut_recipe_tag
+
+        plan = self._plan(tmp_json_dir, speed=1.45, fade_sec=15.0, cut_value=113)
+        assert plan.recipe == autocut_recipe_tag(speed=1.45, cut_value=113, fade_sec=15.0)
+
+    def test_recipe_tracks_plan_params(self, tmp_json_dir: Path):
+        base = self._plan(tmp_json_dir, speed=1.45, fade_sec=15.0, cut_value=113).recipe
+        assert self._plan(tmp_json_dir, speed=1.6, fade_sec=15.0, cut_value=113).recipe != base
+        assert self._plan(tmp_json_dir, speed=1.45, fade_sec=15.0, cut_value=120).recipe != base
+
+
+class TestRecipeTagEmbedding:
+    """渲染配方标记必须写进成片 metadata，供第二阶段缓存比对。"""
+
+    def _kwargs(self, tmp: Path):
+        return dict(
+            video=tmp / "in.mp4",
+            bgm=None,
+            output=tmp / "o.mp4",
+            split_frame=600,
+            cut_frame=1200,
+            sample_rate=44100,
+            fps=60.0,
+            speed=1.45,
+            fade_sec=15.0,
+            align_sec=0.0,
+            has_audio=False,
+        )
+
+    def test_recipe_written_as_comment_metadata(self, tmp_json_dir: Path):
+        from icon_detect.autocut.render import build_autocut_command
+
+        cmd = build_autocut_command(recipe="autocut-v1;speed=1.45", **self._kwargs(tmp_json_dir))
+        assert "-metadata" in cmd
+        assert "comment=autocut-v1;speed=1.45" in cmd
+
+    def test_no_recipe_writes_no_metadata(self, tmp_json_dir: Path):
+        from icon_detect.autocut.render import build_autocut_command
+
+        cmd = build_autocut_command(**self._kwargs(tmp_json_dir))
+        assert not any(a.startswith("comment=") for a in cmd)
+
+
 @pytest.fixture()
 def tmp_json_dir():
     """沙盒下 pytest tmp_path 不可用，改用工作区内临时目录。"""
