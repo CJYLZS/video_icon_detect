@@ -92,8 +92,8 @@ video_icon_detect/
 
 Behavior (spec: `auto-cut.md`):
 1. Splits video at the JSON `tail` segment start (fallback: last 20s). Front part plays at `--speed` (1.45x), tail at original speed.
-2. OCR-scans the tail for the "返回大厅(N秒)" countdown button; the first frame showing `--cut-value` (113) — confirmed on 2 consecutive frames — and everything after it are cut. Countdown start value varies per video (~111–119), so the target is matched by value, not by position.
-3. BGM (`data/bgm.wav`, replace with `--bgm none`) aligns to frame 0, or to the missile-landing camera cut when segments[0] is a missile segment (vignette-ratio cycle + max-frame-diff refinement inside the missile span).
+2. OCR-scans the tail for the "返回大厅(N秒)" countdown button; the first frame showing `--cut-value` (113) and everything after it are cut. Countdown start value varies per video (~111–120), so the target is matched by value, not by position. Confirmation = **3 consecutive frames** reading `<= target` (`STABLE_RUN`), searched forward up to `REFINE_HORIZON_SEC` (15s) from the coarse hit — coarse hits can be fade-in misreads (real case: "120秒" fade-in read as "1"/"20"), and the true 113 may appear seconds later. **Never fall back to the coarse-hit frame when no stable run is found** (the old 2-frame+fallback logic cut six seconds early at 120 on six real videos: 0901/0911/0916/1002/1013/1025). Audit note: trim end is exclusive, so a correct cut's LAST visible frame shows the previous second's value (usually 114, sometimes tail of 115 in a 1.5s window) — values 115–120 or fragments like "20" at the end mean an early cut.
+3. BGM (`data/bgm.wav`, replace with `--bgm none`) aligns to frame 0, or to the missile-landing camera cut when segments[0] is a missile segment (vignette-ratio cycle + max-frame-diff refinement inside the missile span). `has_audio` (source has an audio track) and `has_bgm` (a second `-i` input exists) are **independent** flags in `build_filter_graph`: `--bgm none` on a video with audio keeps the original audio unmixed (`[fa]anull[aout]`) and must never emit `[1:a]`, or ffmpeg aborts with "Invalid file index 1 in filtergraph description".
 4. Original audio is kept at its loudness (`amix normalize=0`, `alimiter` only for peak safety); BGM fades out over the last `--fade-sec` (15s).
 
 Rendering performance & fade (learned from real renders — do not regress):
@@ -101,7 +101,8 @@ Rendering performance & fade (learned from real renders — do not regress):
 - Fade-out is NOT `afade` alone: built-in curves fail perceptually (`tri` linear drops only -5dB at midpoint — inaudible for the first half; `exp` hits silence at ~2/3 of the window). Actual shape = dB-linear ramp via `volume=volume='if(lt(t\,ST)\,1\,pow(10\,-RATE*(t-ST)/20))':eval=frame` (60dB over the fade window, constant -4dB/s at 15s) + `afade=t=out:st=end-1:d=1` for the final digital-zero ramp. Fade window always ends at output end and clamps to the full clip when the clip is shorter than `--fade-sec`.
 
 Coordinate-system rules (learned from real renders — do not regress):
-- Source mp4s are multi-segment AAC stream-copy concatenations: container pts drifts from content time (~0.7s by the end), so video is trimmed by **frame index** (`trim=start_frame/end_frame`) and audio by **sample count** (`asetpts=N/SR/TB` first, then `atrim=start_sample/end_sample`).
+- Source mp4s are multi-segment AAC stream-copy concatenations. Video is trimmed by **frame index** (`trim=start_frame/end_frame`); audio is **resynced to container pts first** (`aresample=SR:first_pts=0`) and only then trimmed by **sample count** (`atrim=start_sample/end_sample`).
+  - **Never use `asetpts=N/SR/TB` on the source audio.** Each concat boundary carries a truncated packet duration marking that segment's AAC priming/padding samples as discardable. Container pts is the authority and matches video (0831.mp4: container audio 215.723s vs video 215.700s, 23ms apart), but the decoder emits all 1024 samples/frame (217.223s, 1.4995s more). `asetpts=N/SR/TB` rebuilds the timeline from decoded frame ordinals, keeping those discardable samples, so audio falls progressively behind as boundaries accumulate — 0831.mp4 had 91 truncated packets (66126 samples) and measured **1.36s of A/V drift at the end**, in sync at the start. `aresample`'s resync drops/pads to container pts; measured drift is zero across 20 probe points. The old comment here claimed the opposite (that container pts drifts ~0.7s) — that inverted rationale was the bug.
 - `afade` st and BGM `atrim` end must use the **output** timeline (front segment shrinks by 1/speed); BGM delay = landing_sec / speed.
 
 
@@ -154,7 +155,7 @@ python tools/classify_dir.py data/test -o output/roi_results --save-roi
 
 ## Development
 
-- **Tests**: `pytest tests/ -q -p no:cacheprovider` (52 tests: 16 CLI mode + 14 auto-cut + 22 main-pipeline layout/cache/stats-parser/map-correction tests; the cache plugin is blocked by the file sandbox).
+- **Tests**: `pytest tests/ -q -p no:cacheprovider` (61 tests: 16 CLI mode + 23 auto-cut + 22 main-pipeline layout/cache/stats-parser/map-correction tests; the cache plugin is blocked by the file sandbox).
 - **Dependencies**: managed via `uv pip install`. `requirements.txt` lists 6 packages (opencv-python, numpy, torch, rapidocr, onnxruntime, pytest).
 - GPU (CUDA) is optional; PyTorch falls back to CPU.
 - Template files live in `template/` and are required for detection. `template/icon_classifier.pt` is optional but required for the default classifier-only mode.

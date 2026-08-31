@@ -22,6 +22,13 @@ COUNTDOWN_RE = re.compile(r"返回大厅\s*[（(]\s*(\d{1,3})\s*秒?")
 
 COARSE_STEP = 6  # 粗扫步长（60fps 下 = 10Hz）
 
+# 细化确认：连续 STABLE_RUN 帧读到 <= target 才认定为截断点。
+# 渐变/淡入残影会造成单帧误读（实测"120秒"淡入帧被读成"1"），两帧确认不够。
+STABLE_RUN = 3
+# 细化搜索相对粗扫命中点向前扩展的秒数：若粗扫命中的是误读帧，
+# 真 113 秒可能晚 (起始倒数 - target) 秒才出现。
+REFINE_HORIZON_SEC = 15.0
+
 
 @dataclass(frozen=True)
 class CutResult:
@@ -97,10 +104,40 @@ def detect_countdown_cut(
     )
     if hit_i is not None:
         lo = samples[hit_i - 1][0] + 1 if hit_i > 0 else samples[0][0]
-        hi = min(samples[hit_i][0] + 2, total_frames - 1)  # 扩 2 帧给稳定性确认留空间
+        # 粗扫命中可能是淡入/渐变帧的单帧误读（实测"120秒"淡入被读成"1"），
+        # 真 113 秒可能晚数秒才出现，因此细化窗口向前扩展 REFINE_HORIZON_SEC 秒。
+        hi = min(
+            samples[hit_i][0] + int(REFINE_HORIZON_SEC * fps),
+            total_frames - 1,
+        )
         return _refine_frame(engine, video_path, lo, hi, target_value, fps)
 
     # 情况 2：视频结束仍未到 target —— 无截断
+    return None
+
+
+def first_stable_run(
+    samples: list[tuple[int, int | None]],
+    target_value: int,
+    need_run: int = STABLE_RUN,
+) -> int | None:
+    """从 (帧号, 倒数值|None) 序列中找出首个"连续 need_run 帧 <= target"的起始帧号。
+
+    单帧/两帧的偶发误读（渐变残影）不足以确认；找不到稳定段返回 None，
+    调用方应视为"未检出截断点"而不是回退到某个误读帧。
+    """
+    run_start: int | None = None
+    run_len = 0
+    for idx, v in samples:
+        if v is not None and v <= target_value:
+            if run_len == 0:
+                run_start = idx
+            run_len += 1
+            if run_len >= need_run:
+                return run_start
+        else:
+            run_len = 0
+            run_start = None
     return None
 
 
@@ -112,26 +149,19 @@ def _refine_frame(
     target_value: int,
     fps: float,
 ) -> CutResult | None:
-    """在 (lo, hi] 内逐帧 OCR，返回第一个"连续两帧 value <= target"的帧。
+    """在 [lo, hi] 逐帧 OCR，返回首个"连续 STABLE_RUN 帧 <= target"的帧。
 
-    倒数数字切换存在 1 帧左右的过渡/交叉淡化帧，单帧 OCR 可能抖动；
-    要求下一帧也读到 <= target 才确认，保证截断点落在稳定显示目标值的帧上。
+    找不到稳定段返回 None（宁可保留到视频结尾，也不在误读帧处错剪）。
     """
+    samples: list[tuple[int, int | None]] = []
     with FrameSource(video_path, None) as src:
-        prev_hit: int | None = None
         for idx in range(lo, hi + 1):
             frame = src.load(idx)
             if frame is None:
                 break
-            value = _ocr_roi(engine, frame)
-            if value is not None and value <= target_value:
-                if prev_hit is not None and idx == prev_hit + 1:
-                    return CutResult(frame_idx=prev_hit, t_sec=prev_hit / fps, value=value)
-                prev_hit = idx
-            else:
-                prev_hit = None
-        if prev_hit is not None:
-            # 窗口末尾命中但无下一帧可确认（hi 为粗扫确认帧），直接采用
-            return CutResult(frame_idx=prev_hit, t_sec=prev_hit / fps, value=target_value)
-    # 细化窗口内 OCR 全部失败时，退回窗口末尾（保守：多留一帧）
-    return CutResult(frame_idx=hi, t_sec=hi / fps, value=target_value)
+            samples.append((idx, _ocr_roi(engine, frame)))
+    start = first_stable_run(samples, target_value)
+    if start is None:
+        return None
+    value = next(v for i, v in samples if i >= start and v is not None)
+    return CutResult(frame_idx=start, t_sec=start / fps, value=value)

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from icon_detect.autocut.cut_button import parse_countdown
+from icon_detect.autocut.cut_button import first_stable_run, parse_countdown
 from icon_detect.autocut.manifest import load_manifest
 
 
@@ -24,6 +24,41 @@ class TestParseCountdown:
         assert parse_countdown(["分享战绩"]) is None
         assert parse_countdown([]) is None
         assert parse_countdown([""]) is None
+
+
+class TestFirstStableRun:
+    def test_0901_real_case_fadein_misread(self):
+        # 实测 0901：按钮淡入帧"120秒"被 OCR 读成 1（<=113 误命中），
+        # 真 113 秒在 6 秒后才出现；必须跳过单帧误读定位到真 113。
+        samples = [
+            (8444, 120), (8445, None), (8446, 120), (8447, 120),
+            (8448, 1), (8449, 120), (8450, 120),
+            (8812, 113), (8813, 113), (8814, 113),
+        ]
+        assert first_stable_run(samples, 113) == 8812
+
+    def test_two_consecutive_misreads_not_enough(self):
+        # 两帧连读误读也不足以确认（默认需连续 3 帧）
+        samples = [(0, 1), (1, 1), (2, 120), (3, 113), (4, 113), (5, 113)]
+        assert first_stable_run(samples, 113) == 3
+
+    def test_stable_at_start(self):
+        assert first_stable_run([(0, 113), (1, 113), (2, 113)], 113) == 0
+
+    def test_no_stable_run_returns_none(self):
+        # 全是单帧误读：返回 None（不截断），绝不回退到误读帧
+        samples = [(0, 120), (1, 120), (2, 1), (3, 120), (4, None)]
+        assert first_stable_run(samples, 113) is None
+
+    def test_run_broken_by_none(self):
+        # 稳定段中间夹一帧 None 会打断计数
+        samples = [(0, 113), (1, 113), (2, None), (3, 113), (4, 113), (5, 113)]
+        assert first_stable_run(samples, 113) == 3
+
+    def test_custom_need_run(self):
+        samples = [(0, 113), (1, 113)]
+        assert first_stable_run(samples, 113, need_run=2) == 0
+        assert first_stable_run(samples, 113, need_run=3) is None
 
 
 class TestBuildFilterGraph:
@@ -46,11 +81,12 @@ class TestBuildFilterGraph:
         assert "[0:v]trim=start_frame=0:end_frame=5346,setpts=(PTS-STARTPTS)/(1.450000)[vf]" in graph
         assert "[0:v]trim=start_frame=5346:end_frame=6282,setpts=PTS-STARTPTS[vb]" in graph
         assert (
-            "[0:a]asetpts=N/SR/TB,atrim=start_sample=0:end_sample=3929310,"
+            "[0:a]aresample=44100:first_pts=0,atrim=start_sample=0:end_sample=3929310,"
             "asetpts=PTS-STARTPTS,atempo=1.450000[af]" in graph
         )
         assert (
-            "[0:a]asetpts=N/SR/TB,atrim=start_sample=3929310:end_sample=4617270,"
+            "[0:a]aresample=44100:first_pts=0,"
+            "atrim=start_sample=3929310:end_sample=4617270,"
             "asetpts=PTS-STARTPTS[ab]" in graph
         )
         assert "[vf][af][vb][ab]concat=n=2:v=1:a=1[fv][fa]" in graph
@@ -66,6 +102,79 @@ class TestBuildFilterGraph:
         # bgm 裁到输出时长
         assert "apad,atrim=start=0:end=77.048276[bgm]" in graph
         assert maps == ["-map", "[vout]", "-map", "[aout]"]
+
+    def test_audio_honors_container_pts_not_decoded_sample_count(self):
+        """回归：音频链必须先按容器 pts 重同步，不能用 asetpts=N/SR/TB。
+
+        源 mp4 是多段 AAC stream-copy 拼接，每个拼接边界的 packet duration 被截短
+        （标记 priming/padding 样本应丢弃）。asetpts=N/SR/TB 按解码帧序号重排时间轴，
+        会把这些本该丢弃的样本当成有效内容留下，音频内容随拼接边界累积滞后
+        （0831.mp4 实测：91 个截短包共 66126 样本 = 1.4995s，片尾音频滞后 1.36s）。
+        aresample=SR:first_pts=0 会按容器 pts 补齐/丢弃样本，实测漂移归零。
+        """
+        from icon_detect.autocut.render import build_filter_graph
+
+        graph, _ = build_filter_graph(
+            split_frame=5346,
+            cut_frame=6282,
+            sample_rate=48000,
+            fps=60.0,
+            speed=1.45,
+            fade_sec=15.0,
+            align_sec=0.0,
+            has_audio=True,
+        )
+        assert "asetpts=N/SR/TB" not in graph
+        # 采样率必须取实际值，不能硬编码
+        assert graph.count("[0:a]aresample=48000:first_pts=0,atrim=start_sample=") == 2
+
+    def test_no_bgm_keeps_original_audio_without_second_input(self):
+        """回归：--bgm none 且视频有音轨时，不能引用不存在的 [1:a]。
+
+        has_audio 只说明"源视频有音轨"，has_bgm 才说明"有第二个 -i 输入"。
+        两者混用会生成引用 [1:a] 的滤镜图却只传一个输入，ffmpeg 直接报
+        "Invalid file index 1 in filtergraph description"。
+        此时应保留原声（仍 map 音频），只是不混音、不淡出 BGM。
+        """
+        from icon_detect.autocut.render import build_filter_graph
+
+        graph, maps = build_filter_graph(
+            split_frame=600,
+            cut_frame=3000,
+            sample_rate=44100,
+            fps=60.0,
+            speed=1.45,
+            fade_sec=15.0,
+            align_sec=0.0,
+            has_audio=True,
+            has_bgm=False,
+        )
+        assert "[1:a]" not in graph
+        assert "amix" not in graph
+        # 原声仍要保留并映射出去
+        assert "[0:a]aresample=44100:first_pts=0,atrim=start_sample=" in graph
+        assert "[vf][af][vb][ab]concat=n=2:v=1:a=1[fv][fa]" in graph
+        assert maps == ["-map", "[vout]", "-map", "[aout]"]
+
+    def test_no_bgm_command_has_single_input(self, tmp_json_dir: Path):
+        """bgm=None 时命令只有一个 -i，且滤镜图不引用第二输入。"""
+        from icon_detect.autocut.render import build_autocut_command
+
+        cmd = build_autocut_command(
+            video=tmp_json_dir / "in.mp4",
+            bgm=None,
+            output=tmp_json_dir / "o.mp4",
+            split_frame=600,
+            cut_frame=1200,
+            sample_rate=44100,
+            fps=60.0,
+            speed=1.45,
+            fade_sec=15.0,
+            align_sec=0.0,
+            has_audio=True,
+        )
+        assert cmd.count("-i") == 1
+        assert "[1:a]" not in " ".join(cmd)
 
     def test_align_zero_skips_adelay(self):
         from icon_detect.autocut.render import build_filter_graph

@@ -2,9 +2,16 @@
 
 坐标约定（依据 ffmpeg 官方过滤器文档与社区权威实践）：
 - 视频 trim 按帧号（trim=start_frame/end_frame）——帧号来自 PTS 索引，是精确的解码帧序数；
-- 音频 trim 按样本数（先 asetpts=N/SR/TB 重建时间轴，再 atrim=start_sample/end_sample）——
-  源 mp4 为多段 AAC stream-copy 拼接，容器 pts 时间轴因 AAC priming/padding 样本
-  与内容时间存在漂移（本仓库实测源多 ~0.69s），按 pts 时间切割会截错内容；
+- 音频先按容器 pts 重同步（aresample=SR:first_pts=0），再按样本数 trim
+  （atrim=start_sample/end_sample）——源 mp4 为多段 AAC stream-copy 拼接，
+  每个拼接边界的 packet duration 被容器截短，用于标记该段 AAC 的 priming/padding
+  样本应当丢弃。容器 pts 才是与视频对齐的权威时间轴（0831.mp4 实测容器音频
+  215.723s vs 视频 215.700s，差 23ms）；而解码器会吐出全部 1024 样本/帧
+  （217.223s，多 1.4995s）。
+  【不要改回 asetpts=N/SR/TB】它按解码帧序号重排时间轴，等于把本该丢弃的样本
+  当成有效内容留下，音频随拼接边界累积滞后（0831.mp4：91 个截短包共 66126 样本，
+  片尾音画偏差实测 1.36s）。aresample 的重同步会按容器 pts 补齐/丢弃样本，
+  实测 20 个探测点漂移全部归零。
 - afade 的 st 与 BGM atrim 的 end 均使用【输出】时间轴秒数；
 - 淡出曲线用 exp（指数/DdB 线性）：线性 tri 曲线中点仅 -5dB，听感几乎无变化，
   exp 曲线 25% 处即 -25dB，符合"持续变小的平滑淡出"（本地实测见 tests/AGENTS.md）；
@@ -51,11 +58,15 @@ def build_filter_graph(
     fade_sec: float,
     align_sec: float,
     has_audio: bool,
+    has_bgm: bool = True,
 ) -> tuple[str, list[str]]:
     """构造 filter_complex 与 -map 参数。
 
     split_frame/cut_frame 为源视频帧号（PTS 索引坐标）；
     align_sec 为 BGM 延迟秒数（输出时间轴）；
+    has_audio 表示源视频有音轨；has_bgm 表示存在第二个 -i 输入（BGM 文件）——
+    二者独立：--bgm none 时 has_bgm=False，此时保留原声但不混音，
+    且绝不能引用 [1:a]（否则 ffmpeg 报 Invalid file index 1）。
     返回 (filter_complex, map_args)。
     """
     if cut_frame <= split_frame <= 0:
@@ -83,14 +94,15 @@ def build_filter_graph(
     parts.append(
         f"[0:v]trim=start_frame={split_frame}:end_frame={cut_frame},setpts=PTS-STARTPTS[vb]"
     )
-    # ---- 音频：样本坐标裁剪（asetpts=N/SR/TB 先按样本重建时间轴）----
+    # ---- 音频：先按容器 pts 重同步（丢弃拼接边界的 priming/padding 样本），再按样本裁剪 ----
     if has_audio:
+        resync = f"aresample={sample_rate}:first_pts=0"
         parts.append(
-            f"[0:a]asetpts=N/SR/TB,atrim=start_sample=0:end_sample={front_samples},"
+            f"[0:a]{resync},atrim=start_sample=0:end_sample={front_samples},"
             f"asetpts=PTS-STARTPTS,atempo={speed:.6f}[af]"
         )
         parts.append(
-            f"[0:a]asetpts=N/SR/TB,atrim=start_sample={front_samples}:end_sample={cut_samples},"
+            f"[0:a]{resync},atrim=start_sample={front_samples}:end_sample={cut_samples},"
             f"asetpts=PTS-STARTPTS[ab]"
         )
         parts.append("[vf][af][vb][ab]concat=n=2:v=1:a=1[fv][fa]")
@@ -99,7 +111,7 @@ def build_filter_graph(
     parts.append(f"[fv]fps={fps_s},format=yuv420p[vout]")
     maps += ["-map", "[vout]"]
 
-    if has_audio:
+    if has_audio and has_bgm:
 
         # ---- BGM：延迟到对齐点，裁到输出时长 ----
         align_ms = int(round(align_sec * 1000))
@@ -121,6 +133,10 @@ def build_filter_graph(
             f"{fade_st:.6f})\\,1\\,pow(10\\,-{db_rate:.6f}*(t-{fade_st:.6f})/20))':eval=frame,"
             f"afade=t=out:st={max(0.0, fade_end - 1.0):.6f}:d=1.000000[aout]"
         )
+        maps += ["-map", "[aout]"]
+    elif has_audio:
+        # 无 BGM：原声直出（不混音、不淡出），标签统一为 [aout]
+        parts.append("[fa]anull[aout]")
         maps += ["-map", "[aout]"]
 
     return ";".join(parts), maps
@@ -164,6 +180,7 @@ def build_autocut_command(
         fade_sec=fade_sec,
         align_sec=align_sec,
         has_audio=has_audio,
+        has_bgm=bgm is not None,
     )
     cmd += ["-filter_complex", graph, *maps]
     if gpu:
