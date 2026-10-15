@@ -99,6 +99,9 @@ const SEL = {
     'div[class*="imagegen-image"] img',
     'div[id^="image-"] img',
     'img[alt^="已生成图片"]',
+    'img[alt^="已生成图像"]',
+    'button[data-testid="generated-image-preview"] img',
+    '[data-testid="generated-image-gallery"] img',
     'img[alt^="Generated image"]',
   ],
   // 只放「生成中」独有的信号；不要放 [class*=imagegen]，那个类名生成完也不会消失
