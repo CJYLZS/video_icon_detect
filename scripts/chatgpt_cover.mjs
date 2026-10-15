@@ -483,8 +483,11 @@ async function dumpDebug(page, label, opts) {
 
 async function isLoggedIn(page) {
   try {
-    return (await page.locator(SEL.loginButton[0]).count()) === 0
-      && (await page.locator(SEL.editor[0]).count()) > 0;
+    const hasLogin = await Promise.all(SEL.loginButton.map((s) => page.locator(s).count()))
+      .then((counts) => counts.some((n) => n > 0));
+    const hasEditor = await Promise.all(SEL.editor.map((s) => page.locator(s).count()))
+      .then((counts) => counts.some((n) => n > 0));
+    return !hasLogin && hasEditor;
   } catch { return false; }
 }
 
