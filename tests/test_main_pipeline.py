@@ -179,6 +179,9 @@ class TestClipParserIntegrationFlags:
         args = build_parser().parse_args(["clip", "--video", "x.mp4", "--fps", "10"])
         assert args.force is False
         assert args.no_autocut is False
+        assert args.no_cover_candidates is False
+        assert args.cover_fps == 10.0
+        assert args.jev_model == "jev-d1-3B"
         assert args.output is None  # 由 handler 解析为 output/clips/<stem>/
 
     def test_batch_flags(self) -> None:
@@ -188,6 +191,30 @@ class TestClipParserIntegrationFlags:
             ["clip-batch", "--input-dir", "in", "--output-dir", "out", "--fps", "10", "--force"]
         )
         assert args.force is True
+
+    def test_candidate_scan_can_be_disabled(self) -> None:
+        from icon_detect.cli.parser import build_parser
+
+        args = build_parser().parse_args([
+            "clip-batch", "--input-dir", "in", "--output-dir", "out", "--fps", "10",
+            "--no-cover-candidates", "--cover-fps", "5", "--jev-url", "http://localhost:8000/v1/chat/completions",
+        ])
+        assert args.no_cover_candidates is True
+        assert args.cover_fps == 5
+        assert args.jev_url.startswith("http://localhost")
+
+
+class TestCoverCandidateStage:
+    def test_service_down_is_reported_and_skipped(self, tmp_root: Path, monkeypatch) -> None:
+        from icon_detect.cover_candidates import scanner
+
+        monkeypatch.setattr(scanner, "service_available", lambda _url: False)
+        video = tmp_root / "match.mp4"
+        video.write_bytes(b"video")
+        result = scanner.scan_candidates(video, output_dir=tmp_root / "out")
+        assert result["status"] == "skipped"
+        assert "JEV 服务未启动" in result["reason"]
+        assert not (tmp_root / "out" / "cover_candidates").exists()
 
 
 def _item(text: str, x: float, y: float) -> object:

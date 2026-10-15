@@ -500,6 +500,32 @@ def _run_autocut_stage(
     return None
 
 
+def _run_cover_candidates_stage(args: argparse.Namespace, vo: VideoOutput) -> dict | None:
+    """Default post-processing stage; scans the explicit same-stem main clip only."""
+    if getattr(args, "no_cover_candidates", False):
+        print("[候选封面] 按 --no-cover-candidates 跳过")
+        return {"status": "skipped", "reason": "disabled"}
+    from icon_detect.cover_candidates.scanner import DEFAULT_JEV_MODEL, DEFAULT_JEV_URL, scan_candidates
+    try:
+        result = scan_candidates(
+            vo.clip, output_dir=vo.root, fps=getattr(args, "cover_fps", 10.0),
+            url=getattr(args, "jev_url", None) or DEFAULT_JEV_URL,
+            model=getattr(args, "jev_model", DEFAULT_JEV_MODEL),
+            force=getattr(args, "force", False),
+        )
+    except Exception as exc:  # optional service/API failure must not invalidate clips
+        print(f"[候选封面] 提示：扫描失败，保留视频产物并跳过：{type(exc).__name__}: {exc}")
+        return {"status": "failed", "reason": str(exc)}
+    status = result["status"]
+    if status == "processed":
+        print(f"[候选封面] 完成：{result['yes_count']} 张候选 / {result['frames']} 帧 -> {result['output']}")
+    elif status == "cached":
+        print(f"[候选封面] 缓存已完成，跳过：{result['output']}")
+    else:
+        print(f"[候选封面] 提示：{result.get('reason', '跳过扫描')}")
+    return result
+
+
 def _ensure_stats_txt(
     vo: VideoOutput,
     *,
@@ -534,9 +560,11 @@ def _print_output_tree(vo: VideoOutput) -> None:
         ("剪辑后(BGM)", vo.cut),
         ("清单 JSON", vo.manifest),
         ("战局统计", vo.stats),
+        ("候选封面", vo.root / "cover_candidates" / "scan_summary.json"),
     ):
-        mark = "✓" if p.is_file() else "×"
-        print(f"  [{mark}] {label}: {p.name}")
+        mark = "✓" if p.exists() else "×"
+        name = "cover_candidates/" if label == "候选封面" else p.name
+        print(f"  [{mark}] {label}: {name}")
 
 
 def cmd_clip(args: argparse.Namespace) -> None:
@@ -550,7 +578,7 @@ def cmd_clip(args: argparse.Namespace) -> None:
 
     if stage_one_cached(vo, force=args.force):
         print(f"[缓存] 第一阶段成片+清单已存在，跳过检测与导出: {vo.clip.name}")
-        print("       （--force 强制重做；--no-autocut 只出集锦）")
+        print("       （--force 强制重做；--no-autocut 关闭 BGM 自动剪辑）")
     else:
         cls_only = _resolve_cls_only(args)
         _ensure_template(cls_only=cls_only)
@@ -569,6 +597,10 @@ def cmd_clip(args: argparse.Namespace) -> None:
         )
         _print_clip_result(plan, vo.clip, args.meta_json)
 
+    if not (vo.clip.is_file() and vo.manifest.is_file()):
+        print("警告: 第一阶段成片或清单不完整，跳过后续处理阶段")
+        return
+
     _run_autocut_stage(
         vo,
         force=args.force,
@@ -577,6 +609,7 @@ def cmd_clip(args: argparse.Namespace) -> None:
         enabled=not args.no_autocut,
     )
     _ensure_stats_txt(vo, force=args.force, show_progress=not args.no_progress)
+    _run_cover_candidates_stage(args, vo)
     _print_output_tree(vo)
 
 
@@ -618,9 +651,11 @@ def cmd_clip_batch(args: argparse.Namespace) -> None:
     print(f"输出布局: <输出目录>/<视频名>/ {layout_note}")
     if autocut_enabled:
         print("第二阶段（auto-cut + BGM）默认开启；--no-autocut 关闭，--force 忽略缓存")
+    if not getattr(args, "no_cover_candidates", False):
+        print("候选封面默认开启：扫描同名主成片；JEV 服务不可用时提示并跳过")
     print(f"共 {len(videos)} 个视频，按文件名顺序处理")
 
-    rendered = cached = failed = cut_ready = 0
+    rendered = cached = failed = cut_ready = candidates_ready = candidates_skipped = candidates_failed = 0
 
     for i, video in enumerate(videos, 1):
         print(f"\n{'=' * 60}")
@@ -660,6 +695,13 @@ def cmd_clip_batch(args: argparse.Namespace) -> None:
         ) is not None:
             cut_ready += 1
         _ensure_stats_txt(vo, force=args.force, show_progress=show_progress)
+        candidate = _run_cover_candidates_stage(args, vo)
+        if candidate and candidate["status"] in {"processed", "cached"}:
+            candidates_ready += 1
+        elif candidate and candidate["status"] == "failed":
+            candidates_failed += 1
+        elif candidate:
+            candidates_skipped += 1
         _print_output_tree(vo)
 
     total = len(videos)
@@ -669,6 +711,10 @@ def cmd_clip_batch(args: argparse.Namespace) -> None:
         print(f"BGM 成片就绪: {cut_ready}/{total} 个")
     else:
         print("（--no-autocut：未执行自动剪辑阶段）")
+    if not getattr(args, "no_cover_candidates", False):
+        print(f"候选封面就绪: {candidates_ready}/{total} 个 | 跳过: {candidates_skipped} | 扫描失败: {candidates_failed}")
+    else:
+        print("（--no-cover-candidates：未执行候选封面扫描）")
     print(f"输出根目录: {args.output_dir.resolve()}")
 
 

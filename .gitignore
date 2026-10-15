@@ -26,6 +26,9 @@ Desktop.ini
 
 # 项目产物（README：output 为检测结果）
 output/
+cover_candidates/
+!src/icon_detect/cover_candidates/
+.cover_candidates_work/
 frames/
 frames_*/
 runs/

@@ -4,4 +4,5 @@ torch>=2.0
 rapidocr>=3.9
 onnxruntime>=1.20
 tqdm>=4.65
+Pillow>=10.0
 pytest>=8.0

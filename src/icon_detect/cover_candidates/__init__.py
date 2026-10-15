@@ -1,0 +1,1 @@
+"""Candidate cover scanning helpers."""

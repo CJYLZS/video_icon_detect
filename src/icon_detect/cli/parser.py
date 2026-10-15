@@ -68,8 +68,15 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-autocut",
         action="store_true",
-        help="只导出击杀集锦，不接自动剪辑 + BGM 合成（默认开启）",
+        help="关闭自动剪辑 + BGM 合成；仍提取统计和扫描候选封面",
     )
+    parser.add_argument(
+        "--no-cover-candidates", action="store_true",
+        help="跳过默认开启的 JEV 候选封面扫描",
+    )
+    parser.add_argument("--cover-fps", type=float, default=10.0, help="候选封面扫描采样率（默认 10fps）")
+    parser.add_argument("--jev-url", default=None, help="JEV OpenAI-compatible API 地址（默认 http://127.0.0.1:8000/v1/chat/completions）")
+    parser.add_argument("--jev-model", default="jev-d1-3B", help="JEV 模型 ID（默认 jev-d1-3B）")
     g = parser.add_mutually_exclusive_group()
     g.add_argument(
         "--gpu",
@@ -150,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
       -> output/out/test/ 三件套（集锦、BGM 成片、清单）
   python main.py clip-batch --input-dir input_videos --output-dir data/test/output --fps 10
       -> 每个输入视频一个子目录
-  python main.py clip --video test.mp4 --fps 10 --no-autocut   # 只出集锦
+  python main.py clip --video test.mp4 --fps 10 --no-autocut   # 关闭 BGM 自动剪辑（统计和候选扫描不变）
   python main.py clip --video test.mp4 --fps 10 --force        # 忽略缓存全部重做
 """,
     )
