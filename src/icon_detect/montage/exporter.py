@@ -224,6 +224,7 @@ def run_clip(
         index,
         source_fps=output_fps,
         source_video=config.video,
+        missile_pad_after=missile_pad_after if enable_missile else None,
     )
     if show_progress:
         print(f"      片段清单: {manifest_path}")

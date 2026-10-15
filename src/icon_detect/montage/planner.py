@@ -352,6 +352,7 @@ def save_clip_manifest(
     *,
     source_fps: float,
     source_video: Path,
+    missile_pad_after: float | None = None,
 ) -> None:
     segments: list[dict] = []
     output_offset = 0.0
@@ -395,6 +396,9 @@ def save_clip_manifest(
         "total_segments": len(segments),
         "segments": segments,
     }
+    if missile_pad_after is not None:
+        # auto-cut 第二阶段据此确定落地切镜搜索后缀（导弹片段 = 末次 OCR 命中 + 该秒数）
+        payload["missile_pad_after_sec"] = round(missile_pad_after, 3)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

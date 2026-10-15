@@ -29,6 +29,7 @@ class ManifestInfo:
     path: Path | None
     tail_start_sec: float | None
     missile_span: tuple[float, float] | None  # (start_sec, end_sec)，仅当首段为导弹
+    missile_pad_after_sec: float | None = None  # 清单记录的导弹片段后延秒数（落地切镜搜索后缀）
 
 
 def probe_media_info(video_path: Path) -> MediaInfo:

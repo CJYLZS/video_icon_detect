@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..constants import ROOT
+from ..constants import MISSILE_PAD_AFTER, ROOT
 from ..utils.progress import print_step
 from ..video.index import load_or_build_index
 from .cut_button import CutResult, detect_countdown_cut
@@ -82,11 +82,18 @@ class AutoCutPlan:
             f"（前段 {self.speed}x / 尾段原速）"
         )
         if self.align_result is not None:
-            lines.append(
-                f"BGM 对齐: 导弹落地切镜 {self.align_result.method} "
-                f"帧 {self.align_result.frame_idx} ({self.align_result.t_sec:.3f}s) -> "
-                f"BGM 于输出 {self.align_sec_out:.3f}s 进入"
-            )
+            if self.align_result.method == "suffix-end":
+                lines.append(
+                    f"BGM 对齐: 导弹片段结尾（后缀窗口内未检出落地切镜，回退）"
+                    f"帧 {self.align_result.frame_idx} ({self.align_result.t_sec:.3f}s) -> "
+                    f"BGM 于输出 {self.align_sec_out:.3f}s 进入"
+                )
+            else:
+                lines.append(
+                    f"BGM 对齐: 导弹落地切镜 {self.align_result.method} "
+                    f"帧 {self.align_result.frame_idx} ({self.align_result.t_sec:.3f}s) -> "
+                    f"BGM 于输出 {self.align_sec_out:.3f}s 进入"
+                )
         else:
             lines.append("BGM 对齐: 视频开头")
         if self.cut_result is not None:
@@ -114,6 +121,7 @@ def plan_autocut(
     cut_value: int = 113,
     fade_sec: float = 15.0,
     tail_sec: float = 20.0,
+    missile_pad_after: float | None = None,
     show_progress: bool = True,
 ) -> AutoCutPlan:
     """检测阶段：不写任何视频文件，返回完整计划。"""
@@ -153,14 +161,22 @@ def plan_autocut(
     # ---- 导弹落地切镜检测（仅当开头为导弹片段）----
     align_result: AlignResult | None = None
     if manifest.missile_span is not None:
+        # 搜索后缀 = 导弹片段末尾保留秒数：清单记录值 > 显式参数 > 常量默认
+        if manifest.missile_pad_after_sec is not None:
+            suffix_sec = manifest.missile_pad_after_sec
+        elif missile_pad_after is not None:
+            suffix_sec = missile_pad_after
+        else:
+            suffix_sec = MISSILE_PAD_AFTER
         if show_progress:
-            print_step(2, 3, "检测开头导弹片段的落地切镜点...")
+            print_step(2, 3, f"检测开头导弹片段的落地切镜点（末尾 {suffix_sec:.1f}s 后缀）...")
         ms, me = manifest.missile_span
         align_result = detect_missile_landing(
             video,
             start_frame=index.locate_first_at_or_after(ms),
             end_frame=index.locate_last_at_or_before(me),
             fps=info.fps,
+            suffix_sec=suffix_sec,
             show_progress=show_progress,
         )
 

@@ -1,4 +1,11 @@
-"""导弹落地切镜检测：暗角（瞄准镜遥测视图）进出分析 + 帧差兜底。"""
+"""导弹落地切镜检测：暗角（瞄准镜遥测视图）进出分析 + 帧差精化。
+
+扫描窗口仅限导弹片段末尾的保留后缀（missile_pad_after，OCR 倒计时消失后保留的秒数）
+加一小段预滚：落地切镜必然发生在倒计时文本消失之后（命中/引爆即刻切镜），
+即 [末次 OCR 命中, 片段结尾] 内；全程扫描反而会被飞行视角的瞬时暗角下探
+（如 0914 在 2.1s 处 <0.70 持续 0.4s）触发的假"进入->退出"周期带偏。
+窗口内未检出切镜时回退到导弹片段结尾（BGM 于片段边界进入）。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ..constants import MISSILE_PAD_AFTER
 from ..utils.progress import create_pbar
 from ..video.source import FrameSource
 
@@ -17,6 +25,7 @@ COARSE_STEP = 6        # 粗扫步长（60fps 下 = 10Hz）
 PERSIST = 3            # 连续 N 个样本满足才算进入/退出
 ENTER_THRESH = 0.70    # 四角/中心亮度比低于此 -> 进入暗角视图
 EXIT_THRESH = 0.80     # 高于此 -> 离开暗角视图
+PREROLL_SEC = 1.0      # 后缀窗口前预滚：保证窗口起点处于暗角低区、状态机能完成"进入"确认
 
 
 @dataclass(frozen=True)
@@ -25,7 +34,7 @@ class AlignResult:
 
     frame_idx: int
     t_sec: float
-    method: str  # "vignette" | "frame-diff"
+    method: str  # "vignette" | "suffix-end"
 
 
 def _vignette_ratio(gray: np.ndarray) -> float:
@@ -46,23 +55,14 @@ def _vignette_ratio(gray: np.ndarray) -> float:
 class _LandingScanner:
     def __init__(self) -> None:
         self.prev_small: np.ndarray | None = None
-        self.best_diff = -1.0
-        self.best_diff_idx = -1
 
-    def feed(self, frame: np.ndarray, idx: int) -> tuple[float, float]:
-        """返回 (帧差, 暗角比)。"""
+    def feed(self, frame: np.ndarray, idx: int) -> float:
+        """推进一帧，返回暗角比。"""
         scale = SMALL_W / frame.shape[1]
         small = cv2.resize(frame, (SMALL_W, max(1, int(frame.shape[0] * scale))))
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        if self.prev_small is None:
-            diff = 0.0
-        else:
-            diff = float(np.abs(gray.astype(np.int16) - self.prev_small.astype(np.int16)).mean())
         self.prev_small = gray
-        if diff > self.best_diff:
-            self.best_diff = diff
-            self.best_diff_idx = idx
-        return diff, _vignette_ratio(gray)
+        return _vignette_ratio(gray)
 
 
 def detect_missile_landing(
@@ -71,27 +71,35 @@ def detect_missile_landing(
     start_frame: int,
     end_frame: int,
     fps: float,
+    suffix_sec: float = MISSILE_PAD_AFTER,
     show_progress: bool = True,
 ) -> AlignResult:
-    """在导弹片段 [start_frame, end_frame] 内寻找落地切镜帧。
+    """在导弹片段 [start_frame, end_frame] 的末尾后缀内寻找落地切镜帧。
 
-    主信号：暗角比自常态进入低区（瞄准镜视图）后再恢复的瞬间；
-    若全程未出现暗角周期，退化为片段内帧差峰值。
+    扫描窗口 = [end - (suffix_sec + PREROLL_SEC), end]：
+    主信号：暗角比自暗角低区（瞄准镜视图）恢复到常态的瞬间（退出点），
+    再以窗口内逐帧帧差峰值定位硬切帧；
+    窗口内未出现完整暗角周期（含极少数落地不切镜的情况）时，
+    回退到导弹片段结尾帧。
     """
+    lo_frame = max(start_frame, end_frame - int(round((suffix_sec + PREROLL_SEC) * fps)))
     scanner = _LandingScanner()
-    n_samples = max(0, (end_frame - start_frame) // COARSE_STEP + 1)
+    n_samples = max(0, (end_frame - lo_frame) // COARSE_STEP + 1)
     pbar = create_pbar(n_samples, desc="导弹切镜扫描") if show_progress else None
+
+    def _fallback() -> AlignResult:
+        return AlignResult(frame_idx=end_frame, t_sec=end_frame / fps, method="suffix-end")
 
     enter_idx: int | None = None
     candidate: int | None = None
     state_hi: list[bool] = []  # 暗角比连续高于 EXIT 的样本滑窗
 
     with FrameSource(video_path, None) as src:
-        for idx in range(start_frame, end_frame + 1, COARSE_STEP):
+        for idx in range(lo_frame, end_frame + 1, COARSE_STEP):
             frame = src.load(idx)
             if frame is None:
                 break
-            _, ratio = scanner.feed(frame, idx)
+            ratio = scanner.feed(frame, idx)
             if pbar:
                 pbar.update(1)
 
@@ -123,12 +131,8 @@ def detect_missile_landing(
     if pbar:
         pbar.close()
 
-    if enter_idx is not None:
-        # 进入暗角后到片段结束都未恢复（异常情况）：以片段末帧兜底
-        return AlignResult(frame_idx=end_frame, t_sec=end_frame / fps, method="vignette-end")
-    return AlignResult(
-        frame_idx=scanner.best_diff_idx, t_sec=scanner.best_diff_idx / fps, method="frame-diff"
-    )
+    # 进入暗角后到窗口结束都未恢复，或全程未进入暗角：回退导弹片段结尾
+    return _fallback()
 
 
 def _refine_exit(
