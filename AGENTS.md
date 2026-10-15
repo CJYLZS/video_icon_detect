@@ -120,7 +120,7 @@ python main.py clip-batch --input-dir data/test/input --output-dir data/test/out
 - `<stem>_bgm.mp4` 第二阶段成片（1.45x 变速 + 尾部倒数截断 + BGM 合成）
 - `<stem>.json` 片段清单（auto-cut 的同名 JSON）
 - `战局统计.txt` 结算界面提取的模式/结果/积分/淘汰/不定字段
-- `cover_candidates/` 对同名主成片执行 JEV 筛选得到的候选帧；JEV 未启动时提示并跳过，标题/网页美化/上传仍手动触发
+- `cover_candidates/` 对同名主成片执行 JEV 筛选得到的候选帧；JEV 未启动时提示并跳过。人工挑选一张放到视频同级目录命名为 `封面.jpg` 后，可手动运行 `scripts/pipeline.mjs` 做 ChatGPT 美化/投稿
 
 关键规则（不要回退）：
 - **缓存默认开启**：第一阶段成片+清单同时存在才跳过检测导出（只 mp4 无 json 视为不完整，会重跑）。`--force` 忽略全部缓存强制重做。候选扫描独立缓存，源文件或配置变化后自动重扫；旧结果完成替换时归档。
@@ -131,7 +131,7 @@ python main.py clip-batch --input-dir data/test/input --output-dir data/test/out
 - **容错**：批量模式下单视频第一阶段失败不中断后续视频；第二阶段失败只告警，保留已生成的集锦。
 - 编码加速对两阶段统一生效：`--gpu`/`--cpu` 三态覆盖（互斥），默认自动检测 nvenc → `h264_nvenc -preset p7 -cq 18` + `-hwaccel cuda`。
 - `-o/--output` 与 batch 的 `--output-dir` 现在是**根目录**语义（其下建 `<stem>/` 子目录）；`--meta-json`/`--meta-dir`、`--segments-dir` 仍可选叠加。
-- `--no-autocut` 只关闭 BGM 自动剪辑，统计和候选扫描仍执行；`--no-cover-candidates` 关闭候选扫描。标题生成、网页 ChatGPT 美化和上传均保持手动触发。详见 `docs/cover-candidates.md`。
+- `--no-autocut` 只关闭 BGM 自动剪辑，统计和候选扫描仍执行；`--no-cover-candidates` 关闭候选扫描。标题生成、网页 ChatGPT 美化和上传均保持手动触发；发布工具优先读取同级 `封面.jpg`。组合入口和安全投稿规则见 `docs/publishing.md`。
 - **战局统计提取**（`autocut/summary.py`，独立于 auto-cut 阶段、有自己的缓存）：在尾段 0.5s 粗扫结算界面。识别特征 = 左上角含"模式"（如"突破模式—荣都战场"）+ 左下角 logo 模糊命中（美术字 OCR 常读作"平精美"，按 和平/平精/精英 双字匹配，举报/GAME 兜底）。统计块 ROI 约x[0.20,0.52] y[0.24,0.66]，按 OCR 几何行分组 + x 邻近配对解析；固定字段 积分/淘汰 的值在标签下一行，不定字段标签值同行。**必须解析出 积分/淘汰 之一才接受该帧**——结算流程有统计页→战绩表格页多页，表格页同样带模式/logo 特征，会误触发。已知限制：rec 偶发丢数字（"0点"读作"点"），放大也救不回，如实输出。
 - **地图白名单纠错**：`summary.KNOWN_MAPS`（当前：荣都战场/沙漠绿洲/海湾基地，新图追加即可）。模式串按连字符（`-—－一`，OCR 常把 — 读作一）切出地图名，difflib 相似度对齐到白名单最近项（实测"茶都战场"→"荣都战场"）；相似度 <0.4 视为未知地图保留原样。
 - **OCR 引擎陷阱（不要回退）**：`detection.missile._get_ocr()` 是 `Global.use_det=False` 的**纯识别**引擎，只适合单行文本（倒数按钮/模式名/logo 单行 ROI）。多行文本块必须用 `autocut/summary._get_stats_engine()`（det+rec 完整管线），否则整图返回空。

@@ -78,7 +78,7 @@ video_icon_detect/
 | `clip-batch` | 批量剪辑多个视频 |
 | `clip-extract` | 从集锦 manifest 中提取特定片段的帧 (用于补充训练样本) |
 
-`clip` / `clip-batch` 默认在主剪辑完成后，对输出目录中的同名主成片执行 JEV 候选封面扫描；扫描结果写入 `<stem>/cover_candidates/`，仅作为人工挑选素材。JEV 服务未启动时提示并跳过，不影响剪辑。可用 `--no-cover-candidates` 关闭；`--cover-fps`、`--jev-url`、`--jev-model` 可调整采样和服务。标题生成、网页 ChatGPT 封面美化及投稿仍须手动单独触发。扫描与缓存细节见 [候选封面说明](docs/cover-candidates.md)。
+`clip` / `clip-batch` 默认在主剪辑完成后，对输出目录中的同名主成片执行 JEV 候选封面扫描；扫描结果写入 `<stem>/cover_candidates/`，仅作为人工挑选素材。JEV 服务未启动时提示并跳过，不影响剪辑。可用 `--no-cover-candidates` 关闭；`--cover-fps`、`--jev-url`、`--jev-model` 可调整采样和服务。标题生成、网页 ChatGPT 封面美化及投稿仍须手动单独触发。人工从 `cover_candidates/` 选一张放到视频同级目录并命名为 `封面.jpg`，然后可用 `node scripts/pipeline.mjs` 执行组合流水线。扫描与发布细节见 [候选封面说明](docs/cover-candidates.md) 和 [发布流水线说明](docs/publishing.md)。
 
 ### 1. 构造模板
 
@@ -166,7 +166,7 @@ frames/
 .venv\Scripts\python.exe main.py clip-batch --input-dir input_videos --output-dir output/clips --fps 10
 ```
 
-输出文件名与输入视频同名。 默认完成后会对输出目录中的同名主成片扫描 JEV 候选封面，保存到各目录的 `cover_candidates/`。JEV 未启动时提示并跳过；可用 `--no-cover-candidates` 关闭。标题生成、网页 ChatGPT 封面美化和视频上传仍由人工单独触发。
+输出文件名与输入视频同名。 默认完成后会对输出目录中的同名主成片扫描 JEV 候选封面，保存到各目录的 `cover_candidates/`。JEV 未启动时提示并跳过；可用 `--no-cover-candidates` 关闭。标题生成、网页 ChatGPT 封面美化和视频上传仍由人工单独触发；候选封面选定后命名为同级目录的 `封面.jpg`，发布工具会优先读取它。
 
 ### 6. 其他工具
 

@@ -1,0 +1,10 @@
+{
+  "name": "video-icon-detect-publishing-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ChatGPT cover generation and Bilibili publishing helpers",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.62.1"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "_说明": [
+    "ChatGPT 多账号 profile 配置模板。复制为 cg_profiles.json 后填写本机 profile 路径和启用账号。",
+    "真实 cg_profiles.json 只在本机使用，不要提交。"
+  ],
+  "profiles": [
+    {
+      "name": "acct1",
+      "dir": "%LOCALAPPDATA%\\chatgpt-cover-profile-1",
+      "port": 9233,
+      "enabled": true,
+      "note": "首次运行需手动登录"
+    }
+  ]
+}

@@ -16,6 +16,16 @@ data/
 .env
 .env.*
 
+# Node dependencies
+node_modules/
+
+# Publishing local accounts/state
+cg_profiles.json
+cg_state.json
+cg_debug/
+.bili-automation-profile/
+.bili_uploaded.json
+
 # IDE / 系统
 .idea/
 .vscode/
