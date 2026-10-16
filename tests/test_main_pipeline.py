@@ -181,6 +181,7 @@ class TestClipParserIntegrationFlags:
         assert args.no_autocut is False
         assert args.no_cover_candidates is False
         assert args.cover_fps == 10.0
+        assert args.cover_thresh == 0.6
         assert args.jev_model == "jev-d1-3B"
         assert args.output is None  # 由 handler 解析为 output/clips/<stem>/
 
@@ -197,10 +198,12 @@ class TestClipParserIntegrationFlags:
 
         args = build_parser().parse_args([
             "clip-batch", "--input-dir", "in", "--output-dir", "out", "--fps", "10",
-            "--no-cover-candidates", "--cover-fps", "5", "--jev-url", "http://localhost:8000/v1/systemone",
+            "--no-cover-candidates", "--cover-fps", "5", "--cover-thresh", "0.55",
+            "--jev-url", "http://localhost:8000/v1/systemone",
         ])
         assert args.no_cover_candidates is True
         assert args.cover_fps == 5
+        assert args.cover_thresh == 0.55
         assert args.jev_url.startswith("http://localhost")
 
 

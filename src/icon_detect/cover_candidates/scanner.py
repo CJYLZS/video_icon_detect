@@ -21,6 +21,7 @@ from ..constants import FFMPEG
 
 DEFAULT_JEV_URL = "http://127.0.0.1:8000/v1/systemone"
 DEFAULT_JEV_MODEL = "jev-d1-3B"
+DEFAULT_COVER_THRESHOLD = 0.6
 STYLE = '''总体风格（最高优先级）：重火力、强反馈、原生实战感的高光瞬间封面。必须能从单帧图像本身看出明确、正在发生的战斗动作；游戏 HUD、击杀/得分文字、击倒图标或“命中敌人”提示不能单独作为战斗证据。
 
 判定为“是”必须满足：
@@ -58,7 +59,8 @@ def _encode(raw: bytes) -> bytes:
         return buffer.getvalue()
 
 
-def _ask(index: int, sample: bytes, *, url: str, model: str, fps: float, timeout: float, retries: int) -> dict:
+def _ask(index: int, sample: bytes, *, url: str, model: str, fps: float, timeout: float, retries: int,
+         threshold: float = DEFAULT_COVER_THRESHOLD) -> dict:
     body = {"state": "这是一张视频候选截图，没有参考图。", "images": [
         "data:image/jpeg;base64," + base64.b64encode(sample).decode("ascii")
     ], "questions": {"test": {"type": "noul", "instructions": QUESTION}}}
@@ -72,7 +74,7 @@ def _ask(index: int, sample: bytes, *, url: str, model: str, fps: float, timeout
             probability = raw["answers"]["test"]["noul"]
             if isinstance(probability, bool) or not isinstance(probability, (int, float)) or not math.isfinite(probability) or not 0 <= probability <= 1:
                 raise ValueError("invalid noul probability")
-            result.update(p_yes=probability, predicted="yes" if probability >= 0.5 else "no")
+            result.update(p_yes=probability, predicted="yes" if probability >= threshold else "no")
             break
         except Exception as exc:  # API errors are checkpointed and retried on next invocation
             if attempt == retries:
@@ -100,18 +102,22 @@ def candidates_cached(directory: Path, config: dict) -> bool:
     except (OSError, ValueError, KeyError, TypeError):
         return False
 
-def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0, workers: int = 2,
+def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0,
+                    threshold: float = DEFAULT_COVER_THRESHOLD, workers: int = 2,
                     timeout: float = 180.0, retries: int = 2, url: str = DEFAULT_JEV_URL,
                     model: str = DEFAULT_JEV_MODEL, ffmpeg: Path = FFMPEG, force: bool = False) -> dict:
     """Scan one explicit (same-stem main) clip; publish output atomically on full success."""
     if not video.is_file():
         return {"status": "skipped", "reason": f"找不到扫描视频: {video}"}
     fps = float(fps)
+    threshold = float(threshold)
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError("threshold 必须位于 0~1 之间")
     if not math.isfinite(fps) or fps <= 0 or workers < 1 or not math.isfinite(timeout) or timeout <= 0 or retries < 0:
         raise ValueError("fps/timeout/workers/retries 配置无效")
     stat = video.stat()
-    config = {"version": 5, "video": str(video.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-              "fps": fps, "model": model, "url": url, "state": "这是一张视频候选截图，没有参考图。", "question": QUESTION,
+    config = {"version": 6, "video": str(video.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+              "fps": fps, "threshold": threshold, "model": model, "url": url, "state": "这是一张视频候选截图，没有参考图。", "question": QUESTION,
               "sampling": "ffmpeg fps filter; sample_time is output-grid time"}
     published = output_dir / "cover_candidates"
     if not force and candidates_cached(published, config):
@@ -181,7 +187,7 @@ def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0, workers
                     if index in results:
                         continue
                     pending.add(pool.submit(_ask, index, _encode(raw), url=url, model=model, fps=fps,
-                                            timeout=timeout, retries=retries))
+                                            threshold=threshold, timeout=timeout, retries=retries))
                     if len(pending) >= workers * 4:
                         done, pending = wait(pending, return_when=FIRST_COMPLETED)
                         collect(done)
@@ -199,7 +205,9 @@ def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0, workers
                     process.wait()
         if not count or len(results) < count or any("p_yes" not in results.get(i, {}) for i in range(count)):
             raise RuntimeError("扫描不完整或 JEV 请求失败；断点已保留，重跑将继续")
-        yes = [results[i] for i in range(count) if results[i]["predicted"] == "yes"]
+        for index in range(count):
+            results[index]["predicted"] = "yes" if results[index]["p_yes"] >= threshold else "no"
+        yes = [results[index] for index in range(count) if results[index]["predicted"] == "yes"]
         stage = work / "output"
         if stage.exists():
             if stage.resolve().parent != work.resolve():
@@ -224,7 +232,7 @@ def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0, workers
                 source.replace(stage / name)
                 record["cover_file"] = name
         summary = {"source_video": str(video), "fps": fps, "model": model, "workers": workers,
-                   "frames": count, "yes_count": len(yes), "no_count": count-len(yes), "threshold": .5,
+                   "frames": count, "yes_count": len(yes), "no_count": count-len(yes), "threshold": threshold,
                    "yes_times": [r["sample_time"] for r in yes], "seconds": time.perf_counter()-started,
                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "config": config}
         _save_json(stage / "scan_summary.json", summary)

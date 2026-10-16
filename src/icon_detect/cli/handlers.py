@@ -505,10 +505,16 @@ def _run_cover_candidates_stage(args: argparse.Namespace, vo: VideoOutput) -> di
     if getattr(args, "no_cover_candidates", False):
         print("[候选封面] 按 --no-cover-candidates 跳过")
         return {"status": "skipped", "reason": "disabled"}
-    from icon_detect.cover_candidates.scanner import DEFAULT_JEV_MODEL, DEFAULT_JEV_URL, scan_candidates
+    from icon_detect.cover_candidates.scanner import (
+        DEFAULT_COVER_THRESHOLD,
+        DEFAULT_JEV_MODEL,
+        DEFAULT_JEV_URL,
+        scan_candidates,
+    )
     try:
         result = scan_candidates(
             vo.clip, output_dir=vo.root, fps=getattr(args, "cover_fps", 10.0),
+            threshold=getattr(args, "cover_thresh", DEFAULT_COVER_THRESHOLD),
             url=getattr(args, "jev_url", None) or DEFAULT_JEV_URL,
             model=getattr(args, "jev_model", DEFAULT_JEV_MODEL),
             force=getattr(args, "force", False),

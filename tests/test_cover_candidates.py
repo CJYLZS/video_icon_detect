@@ -50,6 +50,10 @@ def test_systemone_request_shape_and_direct_response(monkeypatch):
     assert captured["body"]["questions"]["test"]["type"] == "noul"
     assert base64.b64decode(captured["body"]["images"][0].split(",", 1)[1]) == payload
     assert result["p_yes"] == 0.75
+    assert result["predicted"] == "yes"  # 0.75 >= 默认阈值 0.6
+    strict = scanner._ask(0, payload, url=scanner.DEFAULT_JEV_URL, model="jev-d1-3B", fps=1,
+                          timeout=1, retries=0, threshold=0.8)
+    assert strict["predicted"] == "no"
 
 
 def test_export_cache_force_and_source_change(video, monkeypatch):
@@ -110,3 +114,32 @@ def test_large_selection_expression_with_real_ffmpeg():
                              "testsrc2=size=16x16:rate=10:duration=0.1",
                              "-vf", "select=" + expression, "-f", "null", "-"], capture_output=True)
     assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+
+def test_threshold_controls_yes_set_and_invalidates_cache(video, monkeypatch):
+    monkeypatch.setattr(scanner, "service_available", lambda _: True)
+    probabilities = [0.5, 0.59, 0.6, 0.75, 0.4]
+
+    def ask(index, sample, **kwargs):
+        return {"index": index, "sample_time": index / kwargs["fps"], "p_yes": probabilities[index]}
+
+    def cover_name(index):
+        return "cover_%06d_%010.3fs.jpg" % (index, index / 10.0)
+
+    monkeypatch.setattr(scanner, "_ask", ask)
+    root = video.parent
+    published = root / "cover_candidates"
+    assert scanner.scan_candidates(video, output_dir=root)["yes_count"] == 2  # 默认 0.6：0.60 与 0.75
+    assert sorted(p.name for p in published.glob("*.jpg")) == [cover_name(2), cover_name(3)]
+    summary = json.loads((published / "scan_summary.json").read_text(encoding="utf-8"))
+    assert summary["threshold"] == 0.6
+    with pytest.raises(ValueError, match="threshold"):
+        scanner.scan_candidates(video, output_dir=root, threshold=1.5)
+    # 阈值是渲染配方的一部分：变化必须重判定，不能命中缓存。
+    relaxed = scanner.scan_candidates(video, output_dir=root, threshold=0.5)
+    assert (relaxed["status"], relaxed["yes_count"]) == ("processed", 4)
+    assert sorted(p.name for p in published.glob("*.jpg")) == [cover_name(i) for i in (0, 1, 2, 3)]
+    strict = scanner.scan_candidates(video, output_dir=root, threshold=0.8)
+    assert strict["yes_count"] == 0
+    assert not list(published.glob("*.jpg"))
+    assert scanner.scan_candidates(video, output_dir=root, threshold=0.8)["status"] == "cached"
