@@ -34,8 +34,8 @@ Copy-Item config\cg_profiles.example.json cg_profiles.json
 
 发布工具读取优先级为：
 
-1. 同级目录的人工定稿 `封面.jpg`；
-2. ChatGPT 生成的 `封面_chatgpt.png` 或 UUID PNG；
+1. ChatGPT 生成的 `封面_chatgpt.png` 或 UUID PNG（同档多张取 mtime 最新的一张）；
+2. 同级目录的人工定稿 `封面.jpg`；
 3. 原始 `封面.png`（仅使用 `--allow-raw-cover` 时允许作为投稿兜底）。
 
 视频使用同级的 `<目录名>_bgm.mp4`，标题使用同级的 `标题.txt`。

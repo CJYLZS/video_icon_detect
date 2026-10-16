@@ -193,8 +193,8 @@ function loadTarget(dir, rootName) {
   const title = readFileSync(titleFile, 'utf8').trim();
   if (!title) fail('标题.txt 为空');
 
-  // 封面：人工从 cover_candidates/ 挑选后放在视频同级目录的 封面.jpg 优先；
-  // 其次是 ChatGPT 美化产物；最后回退原始截图 封面.png。
+  // 封面：ChatGPT 美化产物优先；没有美化产物时才用人工挑选的 封面.jpg，
+  // 最后回退原始截图 封面.png。
   // 同一档多张时取 mtime 最新的一张。
   let coverPath = null;
   let coverKind = null; // polished = 已美化（chatgpt 产物）；raw = 只有原始截图
@@ -203,7 +203,7 @@ function loadTarget(dir, rootName) {
     const UUID_PNG = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.png$/i;
     const manual = files.filter((f) => f === '封面.jpg');
     const polished = files.filter((f) => UUID_PNG.test(f) || f === '封面_chatgpt.png');
-    const pool = manual.length ? manual : (polished.length ? polished : files.filter((f) => f === '封面.png'));
+    const pool = polished.length ? polished : (manual.length ? manual : files.filter((f) => f === '封面.png'));
     if (pool.length) {
       const newest = pool
         .map((f) => ({ f, t: statSync(path.join(dir, f)).mtimeMs }))
@@ -664,7 +664,24 @@ async function setVideoFile(page, videoPath, { expectEmpty = false } = {}) {
   // 真正被监听的是 .bcc-upload-wrapper 下的隐藏 input
   await setInputFilesViaCDP(page, '.bcc-upload-wrapper input[type=file]', [videoPath]);
   log('      已注入，等待表单渲染…');
-  await page.waitForSelector('input[placeholder="请输入稿件标题"]', { timeout: 60000 });
+  // 注入超大视频会触发表单重建，标题字段可能延迟出现或 placeholder 有版本差异。
+  // 轮询可见且可编辑的标题输入框；超时则输出当前页面状态便于定位，而非单 selector 黑盒超时。
+  const titleSelector = 'input[placeholder="请输入稿件标题"]';
+  try {
+    await page.waitForFunction((selector) => {
+      const el = document.querySelector(selector);
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && !el.disabled;
+    }, titleSelector, { timeout: 180000 });
+  } catch (e) {
+    const state = await page.evaluate(() => ({
+      url: location.href, title: document.title,
+      inputs: [...document.querySelectorAll('input')].map((el) => ({ placeholder: el.placeholder, type: el.type, visible: !!(el.offsetWidth || el.offsetHeight), disabled: el.disabled })).slice(0, 30),
+      alerts: [...document.querySelectorAll('[role=alert], .upload-error, .error-msg')].map((el) => (el.innerText || '').trim()).filter(Boolean).slice(0, 10),
+    })).catch(() => null);
+    throw new Error(`注入视频后投稿表单未就绪（${JSON.stringify(state)}）；原始错误: ${e.message}`);
+  }
   log('      表单已渲染 ✓');
   await sleep(2000);
 }

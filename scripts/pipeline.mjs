@@ -37,7 +37,7 @@
  * 退出码：0 = 全部符合预期；2 = 有失败/结果未确认；1 = 参数或前置条件不对
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -130,7 +130,10 @@ const UUID_PNG = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const polishedCover = (dir) => {
   try {
     const files = readdirSync(dir);
-    const f = files.find((n) => UUID_PNG.test(n) || n === '封面_chatgpt.png');
+    const polished = files.filter((n) => UUID_PNG.test(n) || n === '封面_chatgpt.png');
+    const f = polished
+      .map((name) => ({ name, mtime: statSync(path.join(dir, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)[0]?.name;
     return f ? path.join(dir, f) : null;
   } catch { return null; }
 };
