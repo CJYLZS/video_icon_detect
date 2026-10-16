@@ -26,6 +26,10 @@ cg_debug/
 .bili-automation-profile/
 .bili_uploaded.json
 
+# 投稿运行产物（bili_upload 结果截图、本地命令草稿）
+submit_result*.png
+cmd.txt
+
 # IDE / 系统
 .idea/
 .vscode/
