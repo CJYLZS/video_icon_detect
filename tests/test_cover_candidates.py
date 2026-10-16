@@ -23,6 +23,35 @@ def answer(index, sample, **kwargs):
             "predicted": "yes" if yes else "no"}
 
 
+def test_systemone_request_shape_and_direct_response(monkeypatch):
+    import base64
+    import io
+
+    image = Image.new("RGB", (2, 2), "red")
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    payload = buffer.getvalue()
+    captured = {}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self): return json.dumps({"answers": {"test": {"noul": 0.75}}}).encode()
+
+    def open_request(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr(scanner.urllib.request, "urlopen", open_request)
+    result = scanner._ask(0, payload, url=scanner.DEFAULT_JEV_URL, model="jev-d1-3B", fps=1, timeout=1, retries=0)
+    assert captured["url"].endswith("/v1/systemone")
+    assert set(captured["body"]) == {"state", "images", "questions"}
+    assert captured["body"]["questions"]["test"]["type"] == "noul"
+    assert base64.b64decode(captured["body"]["images"][0].split(",", 1)[1]) == payload
+    assert result["p_yes"] == 0.75
+
+
 def test_export_cache_force_and_source_change(video, monkeypatch):
     monkeypatch.setattr(scanner, "service_available", lambda _: True)
     api = Mock(side_effect=answer)

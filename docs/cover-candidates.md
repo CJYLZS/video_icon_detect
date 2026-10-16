@@ -5,14 +5,14 @@ clip / clip-batch 默认在剪辑、BGM 和战局统计之后执行候选扫描�
 ## 配置
 
 - --cover-fps：默认 10，独立于击倒检测 --fps。
-- --jev-url：默认 http://127.0.0.1:8000/v1/chat/completions。
+- --jev-url：默认 http://127.0.0.1:8000/v1/systemone；这是 d1-3B 的专用决策接口，不是 OpenAI Chat Completions。
 - --jev-model：默认 jev-d1-3B。
 - JEV 服务须由用户预先启动，本工具不启动服务、不下载模型。探测 /v1/models，未启动/不可访问时提示并跳过，不影响剪辑和后续视频。
 - 使用仓库 bundled FFmpeg；Python 图像预处理依赖 Pillow，不需要在本仓库安装 VLM 权重或 Transformers。
 
 ## 筛选与产物
 
-沿用旧仓库提示词：重火力、强反馈、原生实战感；激烈交战；优先爆炸、枪口喷火、目标中弹；尽量武器、目标、命中结果同框。单帧 noul 概率 >= 0.5 即收集，不做排名、去重或数量裁剪。两次 FFmpeg 均用相同 fps 滤镜，第二次在 fps 之后按样本索引导出原分辨率 JPG。时间是采样网格时间，不声称为源帧真实 PTS。
+提示词已硬化：总体风格仍为重火力、强反馈、原生实战感，但要求单帧本身就能看出正在发生的战斗动作，并对爆炸/射击给出直接视觉证据——爆炸需见黄/橙/白高亮火焰或闪光核心，射击需见枪口火焰、弹道或撞击火花；只有黑烟灰烟、远景载具或直升机冒烟、得分与击杀 HUD、字幕提示一律判否。单帧 noul 概率 >= 0.5 即收集，不做排名、去重或数量裁剪。两次 FFmpeg 均用相同 fps 滤镜，第二次在 fps 之后按样本索引导出原分辨率 JPG。时间是采样网格时间，不声称为源帧真实 PTS。
 
 每个视频输出 cover_candidates/，含候选 JPG、scan_summary.json、scan_results.json 和 yes_results.json。全 No 也属于完整扫描。
 

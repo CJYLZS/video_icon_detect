@@ -197,7 +197,7 @@ class TestClipParserIntegrationFlags:
 
         args = build_parser().parse_args([
             "clip-batch", "--input-dir", "in", "--output-dir", "out", "--fps", "10",
-            "--no-cover-candidates", "--cover-fps", "5", "--jev-url", "http://localhost:8000/v1/chat/completions",
+            "--no-cover-candidates", "--cover-fps", "5", "--jev-url", "http://localhost:8000/v1/systemone",
         ])
         assert args.no_cover_candidates is True
         assert args.cover_fps == 5

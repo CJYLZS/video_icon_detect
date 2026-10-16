@@ -19,18 +19,21 @@ from pathlib import Path
 
 from ..constants import FFMPEG
 
-DEFAULT_JEV_URL = "http://127.0.0.1:8000/v1/chat/completions"
+DEFAULT_JEV_URL = "http://127.0.0.1:8000/v1/systemone"
 DEFAULT_JEV_MODEL = "jev-d1-3B"
-STYLE = '''总体风格（最高优先级）：重火力、强反馈、原生实战感的高光瞬间封面。
-选取要点：
-1. 正在发生激烈交战，而不是静止展示。
-2. 优先选爆炸展开、枪口喷火、目标中弹的瞬间。
-3. 尽量让武器、目标、命中结果在同一帧里成立。'''
-PROMPT = '这是一张视频候选截图，没有参考图。请严格按照以下条件判断，这张截图是否符合条件，值得作为高光瞬间封面候选。只回答是否符合，不要因为画面好看、构图完整或有载具就放宽标准。'
-QUESTION = STYLE + '\n这张截图是否符合上述条件，值得作为高光瞬间封面候选？'
+STYLE = '''总体风格（最高优先级）：重火力、强反馈、原生实战感的高光瞬间封面。必须能从单帧图像本身看出明确、正在发生的战斗动作；游戏 HUD、击杀/得分文字、击倒图标或“命中敌人”提示不能单独作为战斗证据。
+
+判定为“是”必须满足：
+1. 画面中有清晰可辨的核心战斗主体（武器/载具/敌人或明确的命中目标），且主体与动作结果在同一画面中成立，不是远景航拍、飞行/移动过程或战斗结束后的结果展示。
+2. 若判断为爆炸，必须看见爆炸当下的黄色、橙色或白色高亮火焰/闪光核心，最好同时有冲击、飞散碎片或火焰边缘；只有黑色/灰色烟雾、烟柱、烟幕、爆炸后的残烟，绝不能当作爆炸。
+3. 若判断为射击或命中，必须看见明显的枪口火焰、弹道/曳光、撞击火花或目标被击中的可视瞬间；仅凭准星、血条、得分、击杀提示或字幕不能判定。
+4. 画面应有足够的主体清晰度和动作反馈，不能被大面积烟雾、界面、远距离景物或运动过程遮蔽到无法确认发生了什么。合格图至少要有一种直接视觉证据：清晰的黄色/橙色/白色爆炸火焰或闪光核心，或近距离清晰的枪口火焰、弹道、撞击火花/命中特效；仅有烟雾和 HUD 反馈不够。
+
+以下情况一律判定为“否”：只有黑烟/灰烟而没有黄色或白色高亮火焰；只有烟雾轨迹或残烟；只有远景载具/直升机飞行和命中提示；只有风景、移动、瞄准或战斗结果 HUD；载具/直升机虽然正在移动但看不见清晰攻击特效；航拍视角中只有载具、烟雾和命中/淘汰文字而没有局部可辨的火焰、枪口火焰、曳光或撞击火花；尤其是直升机/飞机周围只有黑烟时，必须判定为否，即使画面出现命中或淘汰得分；无法在单帧确认核心主体和实际攻击结果。'''
+QUESTION = '这是一张视频候选截图，没有参考图。' + STYLE + '\n' + '请严格按照以上硬性条件判断这张截图是否值得作为高光瞬间封面候选。先逐条核对“必须满足”和“一律否决”；任何一条否决条件命中都必须回答否。不要因为画面好看、构图完整、分数高、出现载具或 HUD 提示而放宽标准。只回答是否符合。'
 
 def service_available(url: str, timeout: float = 1.5) -> bool:
-    """Check local OpenAI-compatible endpoint without requiring a model request."""
+    """Check the local System One endpoint without requiring a model request."""
     base = url.split("/v1/", 1)[0].rstrip("/")
     try:
         with urllib.request.urlopen(base + "/v1/models", timeout=timeout) as response:
@@ -56,10 +59,9 @@ def _encode(raw: bytes) -> bytes:
 
 
 def _ask(index: int, sample: bytes, *, url: str, model: str, fps: float, timeout: float, retries: int) -> dict:
-    body = {"model": model, "messages": [{"role": "user", "content": [
-        {"type": "text", "text": PROMPT},
-        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(sample).decode("ascii")}},
-    ]}], "questions": {"test": {"type": "noul", "instructions": QUESTION}}}
+    body = {"state": "这是一张视频候选截图，没有参考图。", "images": [
+        "data:image/jpeg;base64," + base64.b64encode(sample).decode("ascii")
+    ], "questions": {"test": {"type": "noul", "instructions": QUESTION}}}
     result = {"index": index, "sample_time": index / fps, "image_sha256": hashlib.sha256(sample).hexdigest()}
     started = time.perf_counter()
     for attempt in range(retries + 1):
@@ -67,7 +69,7 @@ def _ask(index: int, sample: bytes, *, url: str, model: str, fps: float, timeout
             request = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw = json.load(response)
-            probability = json.loads(raw["choices"][0]["message"]["content"])["answers"]["test"]["noul"]
+            probability = raw["answers"]["test"]["noul"]
             if isinstance(probability, bool) or not isinstance(probability, (int, float)) or not math.isfinite(probability) or not 0 <= probability <= 1:
                 raise ValueError("invalid noul probability")
             result.update(p_yes=probability, predicted="yes" if probability >= 0.5 else "no")
@@ -108,8 +110,8 @@ def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0, workers
     if not math.isfinite(fps) or fps <= 0 or workers < 1 or not math.isfinite(timeout) or timeout <= 0 or retries < 0:
         raise ValueError("fps/timeout/workers/retries 配置无效")
     stat = video.stat()
-    config = {"version": 2, "video": str(video.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-              "fps": fps, "model": model, "url": url, "prompt": PROMPT, "question": QUESTION,
+    config = {"version": 5, "video": str(video.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+              "fps": fps, "model": model, "url": url, "state": "这是一张视频候选截图，没有参考图。", "question": QUESTION,
               "sampling": "ffmpeg fps filter; sample_time is output-grid time"}
     published = output_dir / "cover_candidates"
     if not force and candidates_cached(published, config):

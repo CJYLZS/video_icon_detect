@@ -75,7 +75,7 @@ def _add_clip_common_args(parser: argparse.ArgumentParser) -> None:
         help="跳过默认开启的 JEV 候选封面扫描",
     )
     parser.add_argument("--cover-fps", type=float, default=10.0, help="候选封面扫描采样率（默认 10fps）")
-    parser.add_argument("--jev-url", default=None, help="JEV OpenAI-compatible API 地址（默认 http://127.0.0.1:8000/v1/chat/completions）")
+    parser.add_argument("--jev-url", default=None, help="JEV System One API 地址（默认 http://127.0.0.1:8000/v1/systemone）")
     parser.add_argument("--jev-model", default="jev-d1-3B", help="JEV 模型 ID（默认 jev-d1-3B）")
     g = parser.add_mutually_exclusive_group()
     g.add_argument(
