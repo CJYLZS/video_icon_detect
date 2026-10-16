@@ -87,6 +87,16 @@ def _ask(index: int, sample: bytes, *, url: str, model: str, fps: float, timeout
 
 
 
+def _rank_width(count: int) -> int:
+    """Zero-pad width for the confidence rank, so name sorting matches rank order."""
+    return max(3, len(str(count)))
+
+
+def _cover_filename(record: dict, width: int = 3) -> str:
+    """cover_<rank>_p<p_yes>_<sample_time>s.jpg — 名称升序即置信度降序。"""
+    return f"cover_{record['rank']:0{width}d}_p{record['p_yes']:.4f}_{record['sample_time']:.3f}s.jpg"
+
+
 def candidates_cached(directory: Path, config: dict) -> bool:
     """A completed scan, including all exported frames, must match its source and recipe."""
     try:
@@ -97,7 +107,10 @@ def candidates_cached(directory: Path, config: dict) -> bool:
             summary["config"] == config
             and len(results) == summary["frames"] > 0
             and len(yes) == summary["yes_count"]
-            and all(Path(r["cover_file"]).name == r["cover_file"] and (directory / r["cover_file"]).is_file() for r in yes)
+            # 命名格式也是产物的一部分：旧命名或缺 rank 字段的目录一律视为过期重扫。
+            and all(Path(r["cover_file"]).name == r["cover_file"]
+                    and r["cover_file"] == _cover_filename(r, _rank_width(summary["yes_count"]))
+                    and (directory / r["cover_file"]).is_file() for r in yes)
         )
     except (OSError, ValueError, KeyError, TypeError):
         return False
@@ -208,6 +221,10 @@ def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0,
         for index in range(count):
             results[index]["predicted"] = "yes" if results[index]["p_yes"] >= threshold else "no"
         yes = [results[index] for index in range(count) if results[index]["predicted"] == "yes"]
+        # 置信度排名：文件名首字段，保证按名称升序排序时高置信度在前。
+        width = _rank_width(len(yes))
+        for rank, record in enumerate(sorted(yes, key=lambda r: (-r["p_yes"], r["sample_time"], r["index"])), start=1):
+            record["rank"] = rank
         stage = work / "output"
         if stage.exists():
             if stage.resolve().parent != work.resolve():
@@ -228,7 +245,7 @@ def scan_candidates(video: Path, *, output_dir: Path, fps: float = 10.0,
             if len(images) != len(yes):
                 raise RuntimeError(f"导出帧数不匹配: {len(images)} != {len(yes)}")
             for record, source in zip(yes, images):
-                name = f"cover_{record['index']:06d}_{record['sample_time']:010.3f}s.jpg"
+                name = _cover_filename(record, width)
                 source.replace(stage / name)
                 record["cover_file"] = name
         summary = {"source_video": str(video), "fps": fps, "model": model, "workers": workers,

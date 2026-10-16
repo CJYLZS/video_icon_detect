@@ -123,14 +123,14 @@ def test_threshold_controls_yes_set_and_invalidates_cache(video, monkeypatch):
     def ask(index, sample, **kwargs):
         return {"index": index, "sample_time": index / kwargs["fps"], "p_yes": probabilities[index]}
 
-    def cover_name(index):
-        return "cover_%06d_%010.3fs.jpg" % (index, index / 10.0)
+    def cover_name(rank, index, p_yes):
+        return "cover_%03d_p%.4f_%.3fs.jpg" % (rank, p_yes, index / 10.0)
 
     monkeypatch.setattr(scanner, "_ask", ask)
     root = video.parent
     published = root / "cover_candidates"
     assert scanner.scan_candidates(video, output_dir=root)["yes_count"] == 2  # 默认 0.6：0.60 与 0.75
-    assert sorted(p.name for p in published.glob("*.jpg")) == [cover_name(2), cover_name(3)]
+    assert sorted(p.name for p in published.glob("*.jpg")) == [cover_name(1, 3, 0.75), cover_name(2, 2, 0.6)]
     summary = json.loads((published / "scan_summary.json").read_text(encoding="utf-8"))
     assert summary["threshold"] == 0.6
     with pytest.raises(ValueError, match="threshold"):
@@ -138,8 +138,34 @@ def test_threshold_controls_yes_set_and_invalidates_cache(video, monkeypatch):
     # 阈值是渲染配方的一部分：变化必须重判定，不能命中缓存。
     relaxed = scanner.scan_candidates(video, output_dir=root, threshold=0.5)
     assert (relaxed["status"], relaxed["yes_count"]) == ("processed", 4)
-    assert sorted(p.name for p in published.glob("*.jpg")) == [cover_name(i) for i in (0, 1, 2, 3)]
+    assert sorted(p.name for p in published.glob("*.jpg")) == [
+        cover_name(1, 3, 0.75), cover_name(2, 2, 0.6), cover_name(3, 1, 0.59), cover_name(4, 0, 0.5)]
     strict = scanner.scan_candidates(video, output_dir=root, threshold=0.8)
     assert strict["yes_count"] == 0
     assert not list(published.glob("*.jpg"))
     assert scanner.scan_candidates(video, output_dir=root, threshold=0.8)["status"] == "cached"
+
+
+def test_cover_name_is_confidence_ranked_and_stale_layout_rescans(video, monkeypatch):
+    monkeypatch.setattr(scanner, "service_available", lambda _: True)
+    probabilities = [0.9, 0.62, 0.8, 0.4, 0.55]
+    api = Mock(side_effect=lambda index, sample, **kwargs: {
+        "index": index, "sample_time": index / kwargs["fps"], "p_yes": probabilities[index]})
+    monkeypatch.setattr(scanner, "_ask", api)
+    published = video.parent / "cover_candidates"
+    assert scanner.scan_candidates(video, output_dir=video.parent)["yes_count"] == 3
+    names = sorted(p.name for p in published.glob("*.jpg"))
+    assert names == ["cover_001_p0.9000_0.000s.jpg",
+                     "cover_002_p0.8000_0.200s.jpg",
+                     "cover_003_p0.6200_0.100s.jpg"]
+    # 首字段是置信度排名：按名称升序即置信度降序。
+    assert [n.split("_")[2][1:] for n in names] == ["0.9000", "0.8000", "0.6200"]
+    assert api.call_count == 5
+    assert scanner.scan_candidates(video, output_dir=video.parent)["status"] == "cached"
+    # 旧命名（无 rank/p 字段）不是合法产物，必须整轮重扫。
+    for path in published.glob("cover_*.jpg"):
+        index = int(path.name.split("_")[1])
+        path.rename(published / ("cover_%06d_%010.3fs.jpg" % (index, index / 10.0)))
+    assert scanner.scan_candidates(video, output_dir=video.parent)["status"] == "processed"
+    assert sorted(p.name for p in published.glob("*.jpg")) == names
+    assert api.call_count == 5  # 逐帧判定复用 checkpoint，重命名不重跑模型
